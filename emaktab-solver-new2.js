@@ -23,17 +23,8 @@
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
     async function askGemini(fullPrompt) {
-        const promptLength = fullPrompt.length;
-        console.log(`Промпт для Gemini (длина: ${promptLength} символов).`);
-        if (promptLength < 2000) {
-            console.log("Полный промпт:", fullPrompt);
-        } else {
-            console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
-        }
-        
-        if (promptLength > 25000) {
-            console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая! Это может привести к таймауту или ошибке.`);
-        }
+        console.log("Промпт для Gemini (длина: " + fullPrompt.length + " символов):");
+        // console.log("Полный промпт:", fullPrompt); // Раскомментируйте, если хотите видеть полный промпт всегда
 
         try {
             const response = await fetch(GEMINI_API_URL, {
@@ -43,17 +34,13 @@
                 },
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: fullPrompt }] }],
-                  //  generationConfig: {
-                  //      temperature: 0.6,
-                  //      maxOutputTokens: 1500,
-                  //  }
+                    // generationConfig можно будет добавить позже для тюнинга
                 }),
             });
 
             if (!response.ok) {
                 const errorData = await response.json();
                 console.error('Gemini API Error:', response.status, errorData);
-                if (promptLength < 2000) console.error("Промпт, вызвавший ошибку:", fullPrompt);
                 const detailedError = errorData?.error?.message || JSON.stringify(errorData);
                 return `ОШИБКА API ${response.status}: ${detailedError}`;
             }
@@ -62,11 +49,11 @@
             if (data.candidates && data.candidates.length > 0 &&
                 data.candidates[0].content && data.candidates[0].content.parts &&
                 data.candidates[0].content.parts.length > 0) {
-                console.log("Ответ от Gemini:", data.candidates[0].content.parts[0].text.trim());
-                return data.candidates[0].content.parts[0].text.trim();
+                const geminiResponseText = data.candidates[0].content.parts[0].text.trim();
+                console.log("Ответ от Gemini:", geminiResponseText);
+                return geminiResponseText;
             } else if (data.promptFeedback && data.promptFeedback.blockReason) {
                 console.warn('Gemini API: Запрос заблокирован.', data.promptFeedback);
-                if (promptLength < 2000) console.warn("Промпт, вызвавший блокировку:", fullPrompt);
                 return `ЗАПРОС ЗАБЛОКИРОВАН: ${data.promptFeedback.blockReason}`;
             } else {
                 console.warn('Gemini API: Некорректный формат ответа.', data);
@@ -74,7 +61,6 @@
             }
         } catch (error) {
             console.error('Ошибка при запросе к Gemini API:', error);
-            if (promptLength < 2000) console.error("Промпт, при котором произошла сетевая ошибка:", fullPrompt);
             return `Сетевая ошибка Gemini: ${error.message}`;
         }
     }
@@ -104,24 +90,37 @@
         if (answerInputsData.length > 0 && geminiAnswer && !geminiAnswer.startsWith("ОШИБКА API") && !geminiAnswer.startsWith("ЗАПРОС ЗАБЛОКИРОВАН")) {
             const lines = geminiAnswer.split('\n');
             lines.forEach(line => {
-                const match = line.match(/(?:answer-|INPUT\s+)?([a-zA-Z0-9_ -]+?)\s*:\s*(.*)/i); // Упрощено для захвата метки
+                // Этот regex ищет "answer-X: значение" или "метка: значение"
+                // (?:answer-|INPUT\s+)? - опциональная группа для "answer-" или "INPUT "
+                // ([a-zA-Z0-9_ -]+?) - захватывает метку/ключ (имя колонки, "Среднее значение" и т.д.)
+                // \s*:\s* - двоеточие с пробелами вокруг
+                // (.*) - захватывает значение
+                const match = line.match(/(?:answer-|INPUT\s+)?([a-zA-Z0-9_ -À-ÿ]+?)\s*:\s*(.*)/i);
                 if (match) {
                     let key = match[1].trim();
                     const valueToInsert = match[2].trim();
-                    
-                    // Пытаемся найти input по data-test-id, если ключ похож на answer-X
                     let inputElement;
-                    if (/^answer-\d+$/i.test(key) || /^\d+$/.test(key)) { // Если ключ "answer-X" или просто "X"
-                        const num = key.match(/\d+$/);
-                        if (num) {
-                           inputElement = questionBlockElement.querySelector(`input[data-test-id="answer-${num[0]}"]`);
+
+                    // Пытаемся найти input по data-test-id, если ключ похож на answer-X или просто X
+                    if (/^answer-\d+$/i.test(key) || /^\d+$/.test(key)) {
+                        const numMatch = key.match(/\d+$/);
+                        if (numMatch) {
+                           inputElement = questionBlockElement.querySelector(`input[data-test-id="answer-${numMatch[0]}"]`);
                         }
                     }
                     
                     // Если не нашли по data-test-id, или ключ не похож на answer-X,
-                    // пытаемся найти input, чей "контекст" (из answerInputsData) совпадает с ключом
-                    if (!inputElement && answerInputsData.some(inp => inp.context && inp.context.toLowerCase().includes(key.toLowerCase()))) {
-                         const foundInputData = answerInputsData.find(inp => inp.context && inp.context.toLowerCase().includes(key.toLowerCase()));
+                    // пытаемся найти input, чей "контекст" (из answerInputsData) содержит ключ
+                    // или для таблиц, если ключ - это имя колонки, а значение из первого столбца совпадает
+                    if (!inputElement) {
+                        const foundInputData = answerInputsData.find(inp => {
+                            if (inp.context && inp.context.toLowerCase().includes(key.toLowerCase())) return true;
+                            // Для таблиц: если ключ - это имя колонки, и первый столбец совпадает
+                            if (inp.tableContext && inp.tableContext.header.toLowerCase() === key.toLowerCase()) return true; 
+                            // Пробуем найти по dataTestId напрямую, если Gemini вернул только его (без "answer-")
+                            if (inp.dataTestId && inp.dataTestId.toLowerCase() === key.toLowerCase()) return true;
+                            return false;
+                        });
                          if (foundInputData) {
                             inputElement = questionBlockElement.querySelector(`input[data-test-id="${foundInputData.dataTestId}"]`);
                          }
@@ -136,6 +135,7 @@
                         inputElement.dispatchEvent(new Event('focus', { bubbles: true }));
                         inputElement.dispatchEvent(new Event('input', { bubbles: true, inputType: 'insertText' }));
                         inputElement.dispatchEvent(new Event('change', { bubbles: true }));
+                        // inputElement.dispatchEvent(new Event('blur', { bubbles: true }));
 
                         inputElement.style.backgroundColor = 'lightyellow';
                     } else {
@@ -165,6 +165,7 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
+        // Это версия промпта из "Попытки 7", которая была до "мега-промпта"
         let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ на поставленные вопросы или для заполнения ячеек.
 Не пиши объяснений, рассуждений или промежуточных шагов.
 Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).
@@ -240,15 +241,8 @@ ${mainQuestionText}
             let tableData = null;
             let nonTableInputsData = [];
             let allInputsForDisplay = [];
-            if (!mainQuestionText && answerInputs.length === 0 && !tableElement) {
-                console.log(`   Блок ${blockId} не содержит текста вопроса, таблиц или полей для ввода. Пропускаем.`);
-                displayAnswer(block, "(Этот блок не содержит данных для Gemini)", []);
-                if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
-                continue;
-            }
-             if (!mainQuestionText && (answerInputs.length > 0 || tableElement)) {
-                 console.warn(`   В блоке ${blockId} есть поля ввода/таблица, но не извлечен основной текст вопроса. Промпт может быть неполным.`);
-            }
+            let hasInteractiveElements = false;
+
             if (tableElement) {
                 console.log(`   Блок ${blockId} содержит таблицу.`);
                 tableData = { headers: [], rows: [] };
@@ -260,23 +254,26 @@ ${mainQuestionText}
                     if (tableData.headers.length === 0 && headerCells.length > 0) {
                         tableData.headers = headerCells.map((_, i) => `Колонка ${i + 1}`);
                     }
-                     if (tableData.headers.length === 0 && headerCells.length === 0 && rows.length > 1) {}
                     const dataRows = rows.slice(1);
                     dataRows.forEach(dataRow => {
                         const cells = Array.from(dataRow.querySelectorAll('td'));
                         const rowData = {};
                         let rowHasInput = false;
                         let rowHasData = false;
-                        (tableData.headers.length ? tableData.headers : cells.map((_,i) => `Колонка ${i+1}`)).forEach((header, cellIndex) => {
+                        const currentHeaders = tableData.headers.length ? tableData.headers : cells.map((_,i) => `Колонка ${i+1}`);
+                        currentHeaders.forEach((header, cellIndex) => {
                             const cell = cells[cellIndex];
+                            const firstColHeader = currentHeaders.length ? currentHeaders[0] : null;
+                            const firstColValue = cellIndex === 0 ? (cell ? (cell.innerText || "").trim() : '(нет значения)') : (cells[0] ? (cells[0].innerText || "").trim() : '(нет значения)');
+
                             if (!cell) {
-                                rowData[header] = { type: 'data', value: '(ячейка отсутствует)' };
-                                return;
+                                rowData[header] = { type: 'data', value: '(ячейка отсутствует)' }; return;
                             }
                             const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
                             if (inputField) {
                                 rowHasInput = true;
-                                const inputInfo = { type: 'input', dataTestId: inputField.getAttribute('data-test-id'), placeholder: inputField.getAttribute('placeholder') };
+                                const inputInfo = { type: 'input', dataTestId: inputField.getAttribute('data-test-id'), placeholder: inputField.getAttribute('placeholder'),
+                                                    tableContext: { header: header, firstColValue: firstColValue } }; // Добавляем контекст таблицы
                                 rowData[header] = inputInfo;
                                 allInputsForDisplay.push(inputInfo);
                             } else {
@@ -288,51 +285,57 @@ ${mainQuestionText}
                         if(rowHasInput || rowHasData) tableData.rows.push(rowData);
                     });
                 }
-                let tableHasInputs = tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'));
-                if (!tableHasInputs && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) { tableData = null; } 
-                else if (!tableHasInputs && answerInputs.length === 0) {} 
-                else if (!tableHasInputs && answerInputs.length > 0 && answerInputs.every(inp => tableElement.contains(inp))) {}
+                if (tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'))) {
+                    hasInteractiveElements = true;
+                } else { tableData = null; } // Если в таблице нет инпутов, считаем ее не интерактивной для этого этапа
             }
-            if (!tableData && answerInputs.length > 0) {
-                console.log(`   Блок ${blockId} обрабатывается как список полей ввода.`);
+            
+            if (answerInputs.length > 0 && (!tableData || !answerInputs.every(inp => tableElement && tableElement.contains(inp)))) {
+                console.log(`   Блок ${blockId} обрабатывается (или также обрабатывается) как список полей ввода.`);
                 const allParagraphsInLexical = Array.from(block.querySelectorAll(`${LEXICAL_EDITOR_SELECTOR} > ${PARAGRAPH_SELECTOR}`));
                 answerInputs.forEach(inputEl => {
+                    if (allInputsForDisplay.some(d => d.dataTestId === inputEl.getAttribute('data-test-id'))) return; // Уже учли в таблице
+
                     const dataTestId = inputEl.getAttribute('data-test-id');
                     let contextText = "";
                     const parentPWithInput = inputEl.closest(PARAGRAPH_SELECTOR);
-                    let contextFoundForThisInput = false;
                     if (parentPWithInput) {
                         let pTextBeforeInput = "";
                         for (const childNode of parentPWithInput.childNodes) {
                             if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY)) break;
                             if (childNode.textContent.trim()) pTextBeforeInput += childNode.textContent.trim() + " ";
                         }
-                        if (pTextBeforeInput.trim()) { contextText += `${pTextBeforeInput.trim()} `; contextFoundForThisInput = true; }
+                        if (pTextBeforeInput.trim()) contextText += `${pTextBeforeInput.trim()} `;
                         const indexOfParentP = allParagraphsInLexical.indexOf(parentPWithInput);
                         if (indexOfParentP > 0) {
                             for (let i = indexOfParentP - 1; i >= 0; i--) {
                                 const prevP = allParagraphsInLexical[i];
                                 if (prevP.querySelector(ANSWER_INPUT_SELECTOR) || !prevP.innerText.trim() || (mainQuestionText && mainQuestionText.includes(prevP.innerText.trim()))) break; 
-                                if (!prevP.querySelector(DECORATOR_SPAN_SELECTOR)) { contextText = `${prevP.innerText.trim()} ` + contextText; contextFoundForThisInput = true; break; }
+                                if (!prevP.querySelector(DECORATOR_SPAN_SELECTOR)) { contextText = `${prevP.innerText.trim()} ` + contextText; break; }
                             }
                         }
                     }
                     nonTableInputsData.push({ dataTestId, context: contextText || "(нет явного контекста)" });
-                    allInputsForDisplay.push({dataTestId, context: contextText || "(нет явного контекста)", type: 'input'}); // Добавляем контекст для displayAnswer
+                    allInputsForDisplay.push({dataTestId, context: contextText || "(нет явного контекста)", type: 'input'});
+                    hasInteractiveElements = true;
                 });
             }
-            if (!tableData && nonTableInputsData.length === 0 && answerInputs.length > 0) {
-                 answerInputs.forEach(inputEl => { allInputsForDisplay.push({dataTestId: inputEl.getAttribute('data-test-id'), type: 'input'}); });
-            }
-            if (!tableData && nonTableInputsData.length === 0 && answerInputs.length === 0) {
+            
+            if (!hasInteractiveElements) {
+                console.log(`   Блок ${blockId} не содержит интерактивных элементов для решения Gemini. Пропускаем.`);
                 displayAnswer(block, "(Этот блок не содержит интерактивных элементов для решения)", []);
                 if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
                 continue;
             }
-            const prompt = buildPrompt(mainQuestionText || "(Нет основного текста вопроса)", tableData, nonTableInputsData);
+            
+            const currentMainQuestionText = mainQuestionText || "(Нет основного текста вопроса, но есть интерактивные элементы)";
+            const prompt = buildPrompt(currentMainQuestionText, tableData, nonTableInputsData);
             const geminiAnswer = await askGemini(prompt);
             displayAnswer(block, geminiAnswer, allInputsForDisplay);
-            if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 1000));
+
+            if (questionCounter < questionBlocks.length) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         }
         console.log('eMaktab Solver: Все вопросы на странице обработаны.');
         solveButton.textContent = '✅ Готово! Решить снова?';

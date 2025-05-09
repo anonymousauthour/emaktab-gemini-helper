@@ -11,27 +11,26 @@
 
     // --- Глобальные переменные для UI ---
     let chatWindow = null;
-    let fileInput = null;
-    let textInput = null;
+    // let fileInput = null; // Больше не нужен
+    let textInput = null;    // Теперь это основное поле для текста И для вставки скриншотов
     let chatOutput = null;
     let sendButton = null;
     let currentImageBase64 = null;
+    let currentImageMimeType = null; // Будем хранить MIME-тип
 
     // --- Функции для UI ---
 
     function createChatUI() {
-        if (document.getElementById('emaktab-ai-chat-window')) return; // Уже создан
+        if (document.getElementById('emaktab-ai-chat-window')) return;
 
         chatWindow = document.createElement('div');
         chatWindow.id = 'emaktab-ai-chat-window';
-        // Стили для окна чата (сделайте его маленьким и аккуратным)
         Object.assign(chatWindow.style, {
-            position: 'fixed', bottom: '60px', right: '20px', width: '300px', maxHeight: '400px',
+            position: 'fixed', bottom: '60px', right: '20px', width: '320px', maxHeight: '450px',
             backgroundColor: 'white', border: '1px solid #ccc', borderRadius: '8px', boxShadow: '0 0 10px rgba(0,0,0,0.1)',
             zIndex: '100000', display: 'flex', flexDirection: 'column', padding: '10px', overflow: 'hidden'
         });
 
-        // Кнопка закрытия
         const closeButton = document.createElement('button');
         closeButton.textContent = '✖';
         Object.assign(closeButton.style, {
@@ -44,22 +43,17 @@
         Object.assign(chatOutput.style, {
             flexGrow: '1', overflowY: 'auto', marginBottom: '10px', border: '1px solid #eee', padding: '5px', fontSize: '12px'
         });
-        chatOutput.innerHTML = '<i>Загрузите скриншот и задайте вопрос.</i>';
+        chatOutput.innerHTML = '<i>Вставьте скриншот (Ctrl+V) в поле ниже или просто задайте вопрос.</i>';
         chatWindow.appendChild(chatOutput);
 
-        fileInput = document.createElement('input');
-        fileInput.type = 'file';
-        fileInput.accept = 'image/*';
-        fileInput.style.marginBottom = '5px';
-        fileInput.onchange = handleFileSelect;
-        chatWindow.appendChild(fileInput);
-
         textInput = document.createElement('textarea');
-        textInput.placeholder = 'Ваш вопрос к скриншоту (необязательно)';
-        textInput.rows = 2;
+        textInput.placeholder = 'Вопрос или Ctrl+V для скриншота';
+        textInput.rows = 3; // Увеличим немного
         Object.assign(textInput.style, {
-            width: 'calc(100% - 10px)', marginBottom: '5px', padding: '5px', border: '1px solid #ccc', borderRadius: '4px'
+            width: 'calc(100% - 12px)', marginBottom: '10px', padding: '5px', border: '1px solid #ccc', borderRadius: '4px', resize: 'none'
         });
+        // Добавляем обработчик события 'paste'
+        textInput.addEventListener('paste', handlePaste);
         chatWindow.appendChild(textInput);
 
         sendButton = document.createElement('button');
@@ -71,18 +65,23 @@
         chatWindow.appendChild(sendButton);
 
         document.body.appendChild(chatWindow);
-        chatWindow.style.display = 'none'; // Сначала скрыт
+        chatWindow.style.display = 'none';
     }
 
     function toggleChatWindow() {
         if (!chatWindow) createChatUI();
         chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
         if (chatWindow.style.display === 'flex') {
-            addMessageToChat('<i>Ожидание скриншота...</i>', 'system');
+            addMessageToChat('<i>Вставьте скриншот (Ctrl+V) в поле для вопроса или просто напишите текст.</i>', 'system');
+            textInput.focus(); // Фокус на текстовое поле при открытии
         }
     }
 
     function addMessageToChat(message, sender = 'user') {
+        // ... (код addMessageToChat без изменений)
+    }
+    // Скопируйте код addMessageToChat из предыдущего ответа сюда
+    addMessageToChat = function(message, sender = 'user') { // Переопределение для полноты кода
         if (!chatOutput) return;
         const messageDiv = document.createElement('div');
         messageDiv.style.marginBottom = '5px';
@@ -94,69 +93,96 @@
         } else if (sender === 'user') {
             messageDiv.style.backgroundColor = '#f0f0f0';
             messageDiv.innerHTML = `<b>Вы:</b> ${message}`;
+        } else if (sender === 'user-image') { // Для отображения вставленного изображения
+             messageDiv.style.textAlign = 'center';
+             messageDiv.innerHTML = message; // message уже будет <img ...>
         } else { // system
             messageDiv.innerHTML = `${message}`;
         }
         chatOutput.appendChild(messageDiv);
-        chatOutput.scrollTop = chatOutput.scrollHeight; // Прокрутка вниз
-    }
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+    };
+
 
     // --- Логика обработки ---
 
-    function handleFileSelect(event) {
-        const file = event.target.files[0];
-        if (file && file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                currentImageBase64 = e.target.result.split(',')[1]; // Получаем только Base64 данные
-                addMessageToChat('<img src="' + e.target.result + '" style="max-width:100%; max-height:150px;" alt="скриншот">', 'user-image');
-                addMessageToChat('<i>Скриншот загружен. Введите вопрос или нажмите "Отправить".</i>', 'system');
+    function handlePaste(event) {
+        const items = (event.clipboardData || event.originalEvent.clipboardData)?.items;
+        if (!items) return;
+
+        let foundImage = false;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf("image") !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    foundImage = true;
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        const base64WithPrefix = e.target.result;
+                        currentImageBase64 = base64WithPrefix.split(',')[1];
+                        currentImageMimeType = base64WithPrefix.substring(base64WithPrefix.indexOf(':') + 1, base64WithPrefix.indexOf(';'));
+                        
+                        addMessageToChat('<img src="' + base64WithPrefix + '" style="max-width:100%; max-height:150px; border:1px solid #ddd;" alt="вставленный скриншот">', 'user-image');
+                        addMessageToChat('<i>Скриншот вставлен. Добавьте вопрос или нажмите "Отправить".</i>', 'system');
+                        textInput.value = ""; // Очищаем текстовое поле, если вставили картинку
+                    };
+                    reader.readAsDataURL(blob);
+                    event.preventDefault(); // Предотвращаем стандартную вставку (если это текст/HTML)
+                    break; 
+                }
             }
-            reader.readAsDataURL(file);
-        } else {
-            currentImageBase64 = null;
-            addMessageToChat('<i>Ошибка: Пожалуйста, выберите файл изображения.</i>', 'system');
+        }
+        if (foundImage) {
+            console.log("Изображение вставлено из буфера обмена.");
         }
     }
 
     async function handleSendToGemini() {
-        if (!currentImageBase64) {
-            addMessageToChat('<i>Ошибка: Сначала загрузите скриншот.</i>', 'system');
+        const userText = textInput.value.trim();
+
+        if (!currentImageBase64 && !userText) {
+            addMessageToChat('<i>Ошибка: Вставьте скриншот или напишите текстовый вопрос.</i>', 'system');
             return;
         }
         if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
             alert('Пожалуйста, вставьте ваш API ключ Gemini в скрипт!');
             return;
         }
-
-        const userText = textInput.value.trim();
-        let promptForGemini = "Проанализируй это изображение.";
-        if (userText) {
-            promptForGemini = userText + "\n\nКонтекст изображения ниже:";
-        }
         
-        addMessageToChat(userText || '(Отправлен только скриншот)', 'user');
+        let partsArray = [];
+        if (userText) {
+            partsArray.push({ text: userText });
+            addMessageToChat(userText, 'user');
+        }
+        if (currentImageBase64 && currentImageMimeType) {
+            partsArray.push({
+                inline_data: {
+                    mime_type: currentImageMimeType,
+                    data: currentImageBase64
+                }
+            });
+             if (!userText) { // Если отправляется только картинка, добавляем сообщение
+                addMessageToChat('(Отправлен только скриншот)', 'user');
+            }
+        }
+
         sendButton.disabled = true;
         sendButton.textContent = '⏳ Отправка...';
         chatOutput.scrollTop = chatOutput.scrollHeight;
 
         const requestBody = {
-            contents: [
-                {
-                    parts: [
-                        { text: promptForGemini },
-                        {
-                            inline_data: {
-                                mime_type: "image/png", // Или image/jpeg, в зависимости от скриншота
-                                data: currentImageBase64
-                            }
-                        }
-                    ]
-                }
-            ],
-            // generationConfig: { temperature: 0.4, maxOutputTokens: 1024 } // Можно настроить
+            contents: [{ parts: partsArray }],
         };
 
+        try {
+            // ... (код fetch запроса и обработки ответа Gemini как в предыдущей версии) ...
+            const response = await fetch(GEMINI_API_URL, { /* ... */ });
+            // ...
+        } catch (error) {
+            // ...
+        }
+        // Скопируйте сюда код try/catch блока из функции handleSendToGemini предыдущего ответа
+        // ... (включая sendButton.disabled = false; и очистку currentImageBase64 и textInput.value)
         try {
             const response = await fetch(GEMINI_API_URL, {
                 method: 'POST',
@@ -190,16 +216,16 @@
             sendButton.textContent = 'Отправить Gemini';
             addMessageToChat(`Сетевая ошибка: ${error.message}`, 'gemini');
         }
-        // Очистка для следующего запроса
         currentImageBase64 = null;
-        fileInput.value = ""; // Сбрасываем input file
-        textInput.value = "";
+        currentImageMimeType = null;
+        textInput.value = ""; // Очищаем текстовое поле после отправки
     }
 
 
     // --- Создание кнопки для вызова чата ---
     const helperButton = document.createElement('button');
     helperButton.textContent = '💬 AI';
+    // ... (стили helperButton как раньше) ...
     Object.assign(helperButton.style, {
         position: 'fixed', bottom: '20px', right: '20px', zIndex: '99998',
         padding: '8px 12px', backgroundColor: '#007bff', color: 'white',
@@ -212,7 +238,6 @@
     if (!document.getElementById('emaktab-ai-helper-button')) {
         document.body.appendChild(helperButton);
     }
-    // Первоначальное создание UI чата (скрытого)
     createChatUI();
 
 })();

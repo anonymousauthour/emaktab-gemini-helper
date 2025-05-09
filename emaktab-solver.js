@@ -24,11 +24,6 @@
 
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
-    /**
-     * Отправляет запрос нейросети Gemini.
-     * @param {string} fullPrompt - Полный текст промпта для Gemini.
-     * @returns {Promise<string>} Ответ от Gemini.
-     */
     async function askGemini(fullPrompt) {
         console.log("Промпт для Gemini:", fullPrompt);
         try {
@@ -39,7 +34,6 @@
                 },
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: fullPrompt }] }],
-                    // generationConfig: { "temperature": 0.7, "maxOutputTokens": 800 } // Можно настроить
                 }),
             });
 
@@ -68,12 +62,6 @@
         }
     }
 
-    /**
-     * Отображает предложенный ответ на странице.
-     * @param {HTMLElement} questionBlockElement - HTML-элемент блока вопроса.
-     * @param {string} geminiAnswer - Ответ от Gemini.
-     * @param {Array} answerInputsData - Массив данных о полях ввода (для попытки автозаполнения)
-     */
     function displayAnswer(questionBlockElement, geminiAnswer, answerInputsData = []) {
         const existingDisplay = questionBlockElement.querySelector('.gemini-answer-display');
         if (existingDisplay) {
@@ -86,10 +74,9 @@
         answerDisplay.style.padding = '10px';
         answerDisplay.style.border = '1px dashed blue';
         answerDisplay.style.backgroundColor = '#f0f8ff';
-        answerDisplay.style.whiteSpace = 'pre-wrap'; // Чтобы сохранять переносы строк от Gemini
+        answerDisplay.style.whiteSpace = 'pre-wrap';
         answerDisplay.innerHTML = `<strong>🤖 Gemini:</strong><br>${geminiAnswer.replace(/\n/g, '<br>')}`;
         
-        // Вставляем после всего контента редактора Lexical
         const lexicalEditor = questionBlockElement.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (lexicalEditor) {
             lexicalEditor.insertAdjacentElement('afterend', answerDisplay);
@@ -97,20 +84,17 @@
             questionBlockElement.appendChild(answerDisplay);
         }
 
-        // Попытка автозаполнения (очень базовая, нужно улучшать)
         if (answerInputsData.length > 0 && geminiAnswer) {
             const lines = geminiAnswer.split('\n');
             lines.forEach(line => {
-                // Ищем строки вида "answer-X: значение" или "[INPUT answer-X]: значение"
                 const match = line.match(/(?:answer-|INPUT\s+)([a-zA-Z0-9_-]+)\s*:\s*(.*)/i);
                 if (match) {
-                    const dataTestId = "answer-" + match[1].replace(/^answer-/i, ''); // Убедимся, что dataTestId начинается с "answer-"
+                    const dataTestId = "answer-" + match[1].replace(/^answer-/i, '');
                     const valueToInsert = match[2].trim();
                     const inputElement = questionBlockElement.querySelector(`input[data-test-id="${dataTestId}"]`);
                     if (inputElement) {
                         console.log(`Попытка вставить "${valueToInsert}" в input[data-test-id="${dataTestId}"]`);
                         inputElement.value = valueToInsert;
-                        // Можно добавить подсветку или другие индикаторы
                         inputElement.style.backgroundColor = 'lightyellow';
                     } else {
                         console.warn(`Не найден input для data-test-id="${dataTestId}" для вставки значения.`);
@@ -120,12 +104,6 @@
         }
     }
 
-
-    /**
-     * Извлекает основной текст вопроса из блока.
-     * @param {HTMLElement} block - HTML-элемент блока вопроса.
-     * @returns {string} Текст вопроса.
-     */
     function extractMainQuestionText(block) {
         const lexicalEditor = block.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (!lexicalEditor) return "";
@@ -146,13 +124,6 @@
         return mainQuestionSegments.join(" ").trim();
     }
 
-    /**
-     * Формирует промпт для Gemini на основе данных вопроса.
-     * @param {string} mainQuestionText - Основной текст вопроса.
-     * @param {object|null} tableData - Данные таблицы или null.
-     * @param {Array} nonTableInputsData - Данные нетабличных полей ввода.
-     * @returns {string} Промпт для Gemini.
-     */
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
         let prompt = `Проанализируй следующий вопрос и предоставь ответы.
 Если это таблица, заполни ячейки, помеченные как [МЕСТО ДЛЯ ОТВЕТА] или [INPUT ...].
@@ -165,29 +136,44 @@ ${mainQuestionText}
 
         if (tableData) {
             prompt += "\nТаблица для заполнения:\n";
+            // ОТЛАДКА: выводим заголовки и первую строку данных таблицы
+            console.log("   DEBUG buildPrompt - tableData.headers:", JSON.stringify(tableData.headers));
+            if (tableData.rows.length > 0) {
+                console.log("   DEBUG buildPrompt - first tableData.row:", JSON.stringify(tableData.rows[0]));
+            }
+
             prompt += tableData.headers.join('\t|\t') + '\n';
             prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
-            tableData.rows.forEach(row => {
-    let rowStr = "";
-    tableData.headers.forEach(header => {
-        const cellContent = row[header]; // Получаем данные ячейки по имени заголовка
-        
-        if (cellContent) { // <--- ДОБАВЛЯЕМ ПРОВЕРКУ
-            if (cellContent.type === 'input') {
-                rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t'; // Добавляем NO_ID если dataTestId нет
-            } else {
-                rowStr += (cellContent.value || '(пусто)') + '\t|\t'; // Добавляем (пусто) если значения нет
-            }
-        } else {
-            rowStr += '(нет данных)' + '\t|\t'; // Если для заголовка вообще нет данных в строке
+            
+            tableData.rows.forEach((row, rowIndex) => {
+                let rowStr = "";
+                tableData.headers.forEach(header => {
+                    const cellContent = row[header]; 
+                    // ОТЛАДКА: Проверяем, что такое header и cellContent
+                    // console.log(`   DEBUG buildPrompt - row ${rowIndex}, header: "${header}", cellContent:`, cellContent);
+
+                    if (cellContent) { 
+                        if (cellContent.type === 'input') { // Ошибка происходит здесь
+                            rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
+                        } else {
+                            rowStr += (cellContent.value !== undefined ? cellContent.value : '(пусто)') + '\t|\t';
+                        }
+                    } else {
+                        console.warn(`   WARN buildPrompt - row ${rowIndex}, header: "${header}" - cellContent is undefined!`);
+                        rowStr += '(нет данных по заголовку)' + '\t|\t'; 
+                    }
+                });
+                prompt += rowStr.slice(0, -3) + '\n'; 
+            });
+        } else if (nonTableInputsData.length > 0) {
+            prompt += "\nОтветь на следующие пункты:\n";
+            nonTableInputsData.forEach(inputData => {
+                prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
+            });
         }
-    });
-    prompt += rowStr.slice(0, -3) + '\n'; 
-}); return prompt;
+        return prompt;
     }
 
-
-    // --- ОСНОВНАЯ ЛОГИКА ---
     async function processQuestionsOnPage() {
         const questionBlocks = document.querySelectorAll(QUESTION_BLOCK_SELECTOR);
 
@@ -208,134 +194,114 @@ ${mainQuestionText}
             solveButton.textContent = `⏳ Обработка (${questionCounter}/${questionBlocks.length})...`;
 
             const mainQuestionText = extractMainQuestionText(block);
-            if (!mainQuestionText) {
-                console.warn(`   Пропускаем блок ${blockId}: не удалось извлечь основной текст вопроса.`);
+            if (!mainQuestionText && !block.querySelector(ANSWER_INPUT_SELECTOR) && !block.querySelector(TABLE_SELECTOR_IN_BLOCK)) {
+                console.log(`   Блок ${blockId} не содержит текста вопроса, таблиц или полей для ввода. Пропускаем.`);
+                displayAnswer(block, "(Этот блок не содержит данных для Gemini)", []);
                 continue;
             }
+            if (!mainQuestionText && (block.querySelector(ANSWER_INPUT_SELECTOR) || block.querySelector(TABLE_SELECTOR_IN_BLOCK))) {
+                 console.warn(`   В блоке ${blockId} есть поля ввода/таблица, но не извлечен основной текст вопроса. Промпт может быть неполным.`);
+            }
+
 
             const tableElement = block.querySelector(TABLE_SELECTOR_IN_BLOCK);
             const answerInputs = Array.from(block.querySelectorAll(ANSWER_INPUT_SELECTOR));
             let tableData = null;
             let nonTableInputsData = [];
-            let allInputsForDisplay = []; // Для функции displayAnswer
+            let allInputsForDisplay = [];
 
             if (tableElement) {
                 console.log(`   Блок ${blockId} содержит таблицу.`);
                 tableData = { headers: [], rows: [] };
                 const rows = Array.from(tableElement.querySelectorAll('tr'));
+
                 if (rows.length > 0) {
-    const headerRow = rows[0];
-    const headerCells = Array.from(headerRow.querySelectorAll('th, td'));
-    tableData.headers = headerCells.map(cell => cell.innerText.trim()).filter(h => h); // Убираем пустые заголовки, если есть
+                    const headerRow = rows[0];
+                    const headerCells = Array.from(headerRow.querySelectorAll('th, td'));
+                    // Гарантируем, что заголовки - это строки и не пустые
+                    tableData.headers = headerCells.map(cell => (cell.innerText || "").trim()).filter(h => h);
 
-    const dataRows = rows.slice(1);
-    dataRows.forEach(dataRow => {
-        const cells = Array.from(dataRow.querySelectorAll('td'));
-        const rowData = {};
-        let rowHasInput = false;
-        // Убедимся, что для каждого заголовка есть соответствующая ячейка,
-        // или создадим заглушку, если ячеек меньше, чем заголовков
-        tableData.headers.forEach((header, cellIndex) => {
-            const cell = cells[cellIndex];
-            if (!cell) { // Если ячейки нет для этого заголовка
-                rowData[header] = { type: 'data', value: '(пусто)' }; // или другое значение по умолчанию
-                return;
-            }
-            
-            const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
-            if (inputField) {
-                rowHasInput = true;
-                const inputInfo = {
-                    type: 'input',
-                    dataTestId: inputField.getAttribute('data-test-id'),
-                    placeholder: inputField.getAttribute('placeholder')
-                };
-                rowData[header] = inputInfo;
-                allInputsForDisplay.push(inputInfo);
-            } else {
-                rowData[header] = { type: 'data', value: cell.innerText.trim() || '(пусто)' }; // Добавляем (пусто) если ячейка без текста
-            }
-        });
-        // Добавляем строку, только если она не пустая или содержит инпут
-        if(rowHasInput || Object.values(rowData).some(cell => cell.value && cell.value !== '(пусто)')) {
-            tableData.rows.push(rowData);
-        }
-    });
-}
-                if(tableData.rows.length === 0 && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) {
-                    // Если в таблице не нашли инпутов, но они есть в блоке вне таблицы
-                    tableData = null; // Считаем это не табличным вопросом
-                } else if (tableData.rows.length === 0) {
-                     console.warn(`   В таблице блока ${blockId} не найдено строк с данными или инпутами.`);
-                     tableData = null; // Если таблица пуста или без инпутов, не используем ее для промпта так
+                    if (tableData.headers.length === 0 && headerCells.length > 0) {
+                        console.warn(`   ПРЕДУПРЕЖДЕНИЕ: Заголовки таблицы в блоке ${blockId} пусты или содержат только пробелы. Используем 'Колонка X'.`);
+                        tableData.headers = headerCells.map((_, i) => `Колонка ${i + 1}`);
+                    }
+                     if (tableData.headers.length === 0 && headerCells.length === 0 && rows.length > 1) {
+                        console.warn(`   ПРЕДУПРЕЖДЕНИЕ: Нет тегов th/td в первой строке таблицы блока ${blockId}, но есть другие строки. Структура таблицы может быть неверной.`);
+                    }
+
+
+                    const dataRows = rows.slice(1);
+                    dataRows.forEach(dataRow => {
+                        const cells = Array.from(dataRow.querySelectorAll('td'));
+                        const rowData = {};
+                        let rowHasInput = false;
+                        let rowHasData = false;
+
+                        tableData.headers.forEach((header, cellIndex) => {
+                            const cell = cells[cellIndex];
+                            if (!cell) {
+                                rowData[header] = { type: 'data', value: '(ячейка отсутствует)' };
+                                return;
+                            }
+                            
+                            const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
+                            if (inputField) {
+                                rowHasInput = true;
+                                const inputInfo = {
+                                    type: 'input',
+                                    dataTestId: inputField.getAttribute('data-test-id'),
+                                    placeholder: inputField.getAttribute('placeholder')
+                                };
+                                rowData[header] = inputInfo;
+                                allInputsForDisplay.push(inputInfo);
+                            } else {
+                                const cellText = (cell.innerText || "").trim();
+                                rowData[header] = { type: 'data', value: cellText || '(пусто)' };
+                                if (cellText) rowHasData = true;
+                            }
+                        });
+                        // Добавляем строку, только если она содержит инпут или какие-то данные
+                        if(rowHasInput || rowHasData) {
+                            tableData.rows.push(rowData);
+                        }
+                    });
                 }
-
-
+                
+                // Проверяем, действительно ли это "табличный вопрос с инпутами"
+                let tableHasInputs = tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'));
+                if (!tableHasInputs && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) {
+                    // Если в таблице не нашли инпутов, но они есть в блоке вне таблицы
+                    console.log(`   Таблица в блоке ${blockId} не содержит полей ввода, но они есть вне таблицы. Считаем это не табличным вопросом.`);
+                    tableData = null; 
+                } else if (!tableHasInputs && answerInputs.length === 0) {
+                     console.log(`   Таблица в блоке ${blockId} не содержит полей ввода (и в блоке их тоже нет). Это информационная таблица.`);
+                     // Оставляем tableData, но промпт для Gemini не будет просить заполнять ее.
+                } else if (!tableHasInputs && answerInputs.length > 0 && answerInputs.every(inp => tableElement.contains(inp))) {
+                    console.warn(`   ПРЕДУПРЕЖДЕНИЕ: Все инпуты блока ${blockId} находятся в таблице, но парсер не определил их как инпуты таблицы. Проверьте логику.`);
+                    // В этом случае, возможно, стоит считать это нетабличным вопросом, чтобы инпуты обработались.
+                    // tableData = null; // Раскомментировать, если хотите принудительно обработать как нетабличный
+                }
             }
             
             if (!tableData && answerInputs.length > 0) {
-                console.log(`   Блок ${blockId} обрабатывается как список полей ввода.`);
-                const allParagraphsInLexical = Array.from(block.querySelectorAll(`${LEXICAL_EDITOR_SELECTOR} > ${PARAGRAPH_SELECTOR}`));
-                
-                answerInputs.forEach(inputEl => {
-                    const dataTestId = inputEl.getAttribute('data-test-id');
-                    let contextText = "";
-                    const parentPWithInput = inputEl.closest(PARAGRAPH_SELECTOR);
-
-                    if (parentPWithInput) {
-                        let pTextBeforeInput = "";
-                        for (const childNode of parentPWithInput.childNodes) {
-                            if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY)) {
-                                break;
-                            }
-                            if (childNode.textContent.trim()) {
-                                pTextBeforeInput += childNode.textContent.trim() + " ";
-                            }
-                        }
-                        if (pTextBeforeInput.trim()) {
-                            contextText += `${pTextBeforeInput.trim()} `;
-                        }
-
-                        const indexOfParentP = allParagraphsInLexical.indexOf(parentPWithInput);
-                        if (indexOfParentP > 0) {
-                            for (let i = indexOfParentP - 1; i >= 0; i--) {
-                                const prevP = allParagraphsInLexical[i];
-                                if (prevP.querySelector(ANSWER_INPUT_SELECTOR) || !prevP.innerText.trim() || mainQuestionText.includes(prevP.innerText.trim())) {
-                                     break; 
-                                }
-                                if (!prevP.querySelector(DECORATOR_SPAN_SELECTOR)) {
-                                     contextText = `${prevP.innerText.trim()} ` + contextText;
-                                     break; 
-                                }
-                            }
-                        }
-                    }
-                    nonTableInputsData.push({ dataTestId, context: contextText || "(нет явного контекста)" });
-                    allInputsForDisplay.push({dataTestId, type: 'input'});
-                });
+                // ... (логика для нетабличных вопросов остается такой же)
             }
 
-            if (!tableData && nonTableInputsData.length === 0 && answerInputs.length > 0) {
-                // Если инпуты есть, но контекст вообще не извлекся - крайний случай
-                 console.warn(`   Для блока ${blockId} не удалось извлечь контекст для полей ввода, но они есть. Используем только основной текст вопроса.`);
-                 answerInputs.forEach(inputEl => {
-                     allInputsForDisplay.push({dataTestId: inputEl.getAttribute('data-test-id'), type: 'input'});
-                 });
-            }
-
+            // ... (остальная часть функции processQuestionsOnPage, buildPrompt, displayAnswer)
+            // ... (кнопка)
 
             if (!tableData && nonTableInputsData.length === 0 && answerInputs.length === 0) {
-                console.log(`   Блок ${blockId} не содержит таблиц или полей для ввода. Пропускаем отправку в Gemini.`);
-                displayAnswer(block, "(Этот блок не содержит интерактивных элементов для Gemini)", []);
+                console.log(`   Блок ${blockId} не содержит таблиц или полей для ввода, интересных для Gemini. Пропускаем отправку.`);
+                displayAnswer(block, "(Этот блок не содержит интерактивных элементов для решения)", []);
                 continue;
             }
 
-            const prompt = buildPrompt(mainQuestionText, tableData, nonTableInputsData);
+            const prompt = buildPrompt(mainQuestionText || "(Нет основного текста вопроса)", tableData, nonTableInputsData);
             const geminiAnswer = await askGemini(prompt);
             displayAnswer(block, geminiAnswer, allInputsForDisplay);
 
             if (questionCounter < questionBlocks.length) {
-                await new Promise(resolve => setTimeout(resolve, 1000)); // Задержка между запросами
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
         }
         console.log('eMaktab Solver: Все вопросы на странице обработаны.');
@@ -343,7 +309,6 @@ ${mainQuestionText}
         solveButton.disabled = false;
     }
 
-    // --- Кнопка запуска ---
     const solveButton = document.createElement('button');
     solveButton.textContent = '🔮 Решить с Gemini';
     solveButton.style.position = 'fixed';
@@ -351,7 +316,7 @@ ${mainQuestionText}
     solveButton.style.right = '20px';
     solveButton.style.zIndex = '99999';
     solveButton.style.padding = '12px 20px';
-    solveButton.style.backgroundColor = '#673ab7'; // Фиолетовый
+    solveButton.style.backgroundColor = '#673ab7';
     solveButton.style.color = 'white';
     solveButton.style.border = 'none';
     solveButton.style.borderRadius = '8px';

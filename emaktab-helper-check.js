@@ -188,49 +188,58 @@
         if (foundImage) console.log("Изображение вставлено из буфера обмена.");
     }
 
-    async function handleSendToGemini() {
-        const userText = textInput.value.trim();
-        if (!currentImageBase64 && !userText) {
-            addMessageToChat('<i>Ошибка: Вставьте скриншот или напишите текстовый вопрос.</i>', 'system');
-            return;
-        }
-        if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
-            alert('Пожалуйста, вставьте ваш API ключ Gemini в скрипт!');
-            return;
-        }
-        
-        let partsArray = [];
-        let userMessageForChat = "";
+   async function handleSendToGemini() {
+    const userText = textInput.value.trim();
+    if (!currentImageBase64 && !userText) {
+        addMessageToChat('<i>Ошибка: Вставьте скриншот или напишите текстовый вопрос.</i>', 'system');
+        return;
+    }
+    if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
+        alert('Пожалуйста, вставьте ваш API ключ Gemini в скрипт!');
+        return;
+    }
+    
+    let partsArray = [];
+    let promptForGemini = ""; // Будем формировать основной промпт здесь
+    let userMessageForChat = "";
 
-        if (userText) {
-            partsArray.push({ text: userText });
-            userMessageForChat = userText;
+    if (currentImageBase64 && currentImageMimeType) {
+        partsArray.push({
+            inline_data: {
+                mime_type: currentImageMimeType,
+                data: currentImageBase64
+            }
+        });
+        // Не отображаем картинку в чате снова, она уже там от handlePaste
+    }
+
+    if (userText) { // Если пользователь ввел текст
+        promptForGemini = userText;
+        if (currentImageBase64) { // Если есть и текст, и картинка
+            promptForGemini += "\n\nПроанализируй изображение выше и ответь на вопрос. Если это задача с выбором ответа, укажи букву или текст правильного варианта.";
         }
-        // Если есть прикрепленное изображение, добавляем его
-        if (currentImageBase64 && currentImageMimeType) {
-            partsArray.push({
-                inline_data: {
-                    mime_type: currentImageMimeType,
-                    data: currentImageBase64
-                }
-            });
-             if (!userText) userMessageForChat = '(Отправлен только скриншот)';
-             // Если был текст и картинка, картинка уже отображена, текст будет отображен ниже
-        }
-        
-        if (userMessageForChat) { // Отображаем сообщение пользователя, если оно есть
-            addMessageToChat(userMessageForChat, 'user');
-        }
+        userMessageForChat = userText;
+        addMessageToChat(userMessageForChat, 'user');
+    } else if (currentImageBase64) { // Если только картинка
+        promptForGemini = "Проанализируй это изображение. Если это задача, реши ее. Если это вопрос с вариантами ответа, укажи букву (например, A, B, C, D) или полный текст правильного варианта. Предоставь ТОЛЬКО КОНЕЧНЫЙ ОТВЕТ, без объяснений или промежуточных шагов.";
+        // Сообщение "(Отправлен только скриншот)" БОЛЬШЕ НЕ ДОБАВЛЯЕТСЯ В ЧАТ
+        // Но мы все еще можем его логировать для себя, если нужно:
+        // console.log("Отправляется только скриншот с инструкцией по умолчанию.");
+    }
+    
+    if (promptForGemini) { // Добавляем текст промпта в partsArray, только если он есть
+        partsArray.unshift({ text: promptForGemini }); // Текст всегда должен идти первым для некоторых моделей
+    }
 
 
-        sendButton.disabled = true;
-        sendButton.textContent = '⏳ Отправка...';
-        chatOutput.scrollTop = chatOutput.scrollHeight;
+    sendButton.disabled = true;
+    sendButton.textContent = '⏳ Отправка...';
+    chatOutput.scrollTop = chatOutput.scrollHeight;
 
-        const requestBody = {
-            contents: [{ parts: partsArray }],
-            // generationConfig: { temperature: 0.5, maxOutputTokens: 1024 } 
-        };
+    const requestBody = {
+        contents: [{ parts: partsArray }],
+        // generationConfig: { temperature: 0.3, maxOutputTokens: 512 } // Можно раскомментировать и настроить
+    };
 
         try {
             const response = await fetch(GEMINI_API_URL, {

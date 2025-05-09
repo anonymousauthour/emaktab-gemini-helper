@@ -39,46 +39,44 @@
 
     const katexHtmlNode = decoratorNode.querySelector('.katex-html');
     if (katexHtmlNode) {
-        // Сначала проверяем, есть ли явный элемент дроби KaTeX (.mfrac)
         const mfracNode = katexHtmlNode.querySelector('.mfrac');
         if (mfracNode) {
-            // Пытаемся найти числитель и знаменатель по их типичной структуре в KaTeX
-            // Это очень упрощенно и может потребовать адаптации под конкретную структуру KaTeX на сайте
-            // KaTeX для \frac{a}{b} часто генерирует что-то вроде:
-            // <span class="mfrac">
-            //   <span><span>a</span></span> (числитель, может быть в нескольких вложенных span)
-            //   <span><span>b</span></span> (знаменатель)
-            // </span>
-            // ИЛИ
-            // <span class="mfrac">
-            //   <span class="vlist-t"><span class="vlist-r"><span class="vlist">...a...</span></span></span> (числитель)
-            //   <span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist">...b...</span></span></span> (знаменатель)
-            // </span>
-            // На вашем скриншоте видна структура с .vlist-t, .vlist-r, .pstrut
+            // Находим все элементы, которые могут содержать части числа (числитель/знаменатель)
+            // Это span'ы с классом 'mord' и 'mtight', которые являются непосредственными контейнерами цифр
+            const numberParts = mfracNode.querySelectorAll('span.mord.mtight > span.mord.mtight'); 
+                                        // Или просто 'span.mord.mtight' если вложенность только один уровень
+                                        // Возможно, даже лучше '.mfrac span.mord.mtight' и брать первые два найденных
             
-            const numeratorNodes = mfracNode.querySelectorAll('.vlist-t:first-child .pstrut ~ span, .mfrac > span:first-child span:not([class])'); // Очень примерные селекторы!
-            const denominatorNodes = mfracNode.querySelectorAll('.vlist-t.vlist-t2 .pstrut ~ span, .mfrac > span:last-child span:not([class])');
+            let partsText = [];
+            numberParts.forEach(part => {
+                const text = part.innerText.trim();
+                if (text && !isNaN(text)) { // Убедимся, что это число
+                    partsText.push(text);
+                }
+            });
 
-            let numeratorText = "";
-            numeratorNodes.forEach(n => numeratorText += n.innerText.trim());
-            
-            let denominatorText = "";
-            denominatorNodes.forEach(d => denominatorText += d.innerText.trim());
-
-            if (numeratorText && denominatorText && !isNaN(numeratorText) && !isNaN(denominatorText)) {
-                return `${numeratorText}/${denominatorText}`;
+            if (partsText.length >= 2) { // Если нашли хотя бы два числовых компонента
+                // Предполагаем, что первый - числитель, второй - знаменатель
+                return `${partsText[0]}/${partsText[1]}`;
+            } else if (partsText.length === 1) {
+                 // Если только одна часть, возможно, это не дробь или ошибка парсинга
+                 console.warn("В .mfrac найдена только одна числовая часть:", partsText[0], mfracNode);
+                 return partsText[0]; // Вернем то, что нашли
             }
-            // Если не удалось распарсить числитель/знаменатель, пробуем старый метод
+            // Если не удалось распарсить как дробь, пробуем старый метод с innerText всего KaTeX блока
+            console.warn("Не удалось извлечь числитель/знаменатель из .mfrac, используется innerText:", mfracNode);
         }
 
-        // Если не нашли .mfrac или не смогли распарсить, пробуем старый метод по пробелу
+        // Если не нашли .mfrac или парсинг .mfrac не дал результата, пробуем взять innerText всего katex-html
         let text = katexHtmlNode.innerText.trim().replace(/\s+/g, ' ');
-        const parts = text.split(' ');
-        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-            // Это предположение, что KaTeX для a/b выводит "b a"
-            return `${parts[1]}/${parts[0]}`;
+        const textParts = text.split(' ');
+        if (textParts.length === 2 && !isNaN(textParts[0]) && !isNaN(textParts[1])) {
+             // Это старое предположение "знаменатель числитель"
+             // Если оно неверно для этого сайта, эту часть нужно будет изменить или убрать
+            console.log(`Использован fallback для KaTeX innerText: "${text}" -> "${textParts[1]}/${textParts[0]}"`);
+            return `${textParts[1]}/${textParts[0]}`;
         }
-        // Для других математических выражений (не дробей, или если парсинг дроби не удался)
+        // Для других математических выражений
         return text; 
     }
 
@@ -87,7 +85,7 @@
         return imgInside.getAttribute('alt').trim();
     }
     
-    return "";
+    return ""; 
 }
 
     async function askGemini(fullPrompt) {

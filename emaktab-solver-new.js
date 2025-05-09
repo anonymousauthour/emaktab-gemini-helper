@@ -43,10 +43,10 @@
                 },
                 body: JSON.stringify({
                     contents: [{ parts: [{ text: fullPrompt }] }],
-                    generationConfig: {
-                        temperature: 0.6,
-                        maxOutputTokens: 1500,
-                    }
+                  //  generationConfig: {
+                  //      temperature: 0.6,
+                  //      maxOutputTokens: 1500,
+                  //  }
                 }),
             });
 

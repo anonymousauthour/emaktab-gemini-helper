@@ -155,47 +155,29 @@
     function extractMainQuestionText(block) {
         const lexicalEditor = block.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (!lexicalEditor) return "";
+        
         let mainQuestionSegments = [];
-        const paragraphs = Array.from(lexicalEditor.querySelectorAll(PARAGRAPH_SELECTOR));
-        for (const p of paragraphs) {
+        const allTextSpans = Array.from(lexicalEditor.querySelectorAll(TEXT_SPAN_SELECTOR));
+
+        allTextSpans.forEach(span => {
             let isPartOfOption = false;
             if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
                 for (const mcOptEl of currentBlockMcOptionElements) {
-                    if (mcOptEl.contains(p) || p.contains(mcOptEl) || mcOptEl === p) {
-                        const pContainsActualInputOrDecorator = p.querySelector(ANSWER_INPUT_SELECTOR) ||
-                                                              p.querySelector(DECORATOR_SPAN_SELECTOR) ||
-                                                              p.matches(MC_OPTION_SELECTOR);
-                        if (pContainsActualInputOrDecorator || mcOptEl.contains(p)) {
-                             isPartOfOption = true;
-                             break;
-                        }
+                    if (mcOptEl.contains(span)) {
+                        isPartOfOption = true;
+                        break;
                     }
                 }
             }
-            if (isPartOfOption) continue;
-            const textSpans = p.querySelectorAll(TEXT_SPAN_SELECTOR);
-            let paragraphText = "";
-            textSpans.forEach(span => {
-                let spanIsOptionText = false;
-                if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
-                    for (const mcOptEl of currentBlockMcOptionElements) {
-                        if (mcOptEl.contains(span)) {
-                            spanIsOptionText = true;
-                            break;
-                        }
-                    }
-                }
-                if (!spanIsOptionText) {
-                    paragraphText += span.innerText.trim() + " ";
-                }
-            });
-            if (paragraphText.trim()) {
-                mainQuestionSegments.push(paragraphText.trim());
+            
+            if (!isPartOfOption) {
+                mainQuestionSegments.push(span.innerText.trim());
             }
-        }
+        });
+        
         return mainQuestionSegments.join(" ").trim();
     }
-
+    
     function buildPrompt(mainQuestionText, typeData) {
         let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не пиши объяснений или промежуточных шагов.\n`;
         if (typeData.type === 'table') {
@@ -251,10 +233,16 @@
             const blockId = block.getAttribute('data-test-id');
             console.log(`\n--- Обработка блока #${questionCounter} (data-test-id: ${blockId}) ---`);
             solveButton.textContent = `⏳ Обработка (${questionCounter}/${questionBlocks.length})...`;
-            currentBlockMcOptionElements = Array.from(block.querySelectorAll(MC_OPTION_SELECTOR));
+            
+            // СНАЧАЛА находим mcOptionElements для использования в extractMainQuestionText
+            currentBlockMcOptionElements = Array.from(block.querySelectorAll(MC_OPTION_SELECTOR)); 
+            
             const mainQuestionText = extractMainQuestionText(block);
-            const actualMcOptionElements = currentBlockMcOptionElements;
-            currentBlockMcOptionElements = null;
+            
+            // Затем можно использовать currentBlockMcOptionElements дальше или переприсвоить в actualMcOptionElements
+            const actualMcOptionElements = currentBlockMcOptionElements; 
+            // currentBlockMcOptionElements = null; // Можно не сбрасывать, он перезапишется на след. итерации
+
             const tableElement = block.querySelector(TABLE_SELECTOR_IN_BLOCK);
             const inputFields = Array.from(block.querySelectorAll(ANSWER_INPUT_SELECTOR));
             let tableData = null;

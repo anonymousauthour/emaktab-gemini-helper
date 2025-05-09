@@ -23,7 +23,15 @@
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
     async function askGemini(fullPrompt) {
-    console.log("Промпт для Gemini (длина: " + fullPrompt.length + " символов):", fullPrompt); // Добавим длину для отладки
+    const promptLength = fullPrompt.length;
+    console.log(`Промпт для Gemini (длина: ${promptLength} символов). Первые 500 символов:`, fullPrompt.substring(0, 500));
+    
+    if (promptLength > 15000) { // Примерный порог, после которого могут начаться проблемы
+        console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая! Это может привести к таймауту или ошибке.`);
+        // Можно даже вернуть заглушку, чтобы не отправлять слишком большой промпт
+        // return "Промпт слишком длинный для обработки."; 
+    }
+
     try {
         const response = await fetch(GEMINI_API_URL, {
             method: 'POST',
@@ -33,11 +41,14 @@
             body: JSON.stringify({
                 contents: [{ parts: [{ text: fullPrompt }] }],
                 generationConfig: {
-                    temperature: 0.3,     // Оставим чуть пониже для точности
-                    maxOutputTokens: 10000, // Увеличим, чтобы точно хватило места для ответа
-                    // stopSequences: []  // Пока уберем, чтобы не мешали
+                    temperature: 0.5,     // Немного повысим, чтобы дать больше свободы
+                    maxOutputTokens: 1024, // Увеличим значительно, чтобы точно хватило
+                    // topK: 40,          // Можно попробовать эти параметры для разнообразия
+                    // topP: 0.95,
                 }
             }),
+            // Можно попробовать добавить явный таймаут для fetch, но это сложнее
+            // и не всегда поддерживается в userscript-окружении без GM_xmlhttpRequest
         });
 
             if (!response.ok) {

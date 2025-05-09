@@ -168,24 +168,22 @@ ${mainQuestionText}
             prompt += tableData.headers.join('\t|\t') + '\n';
             prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
             tableData.rows.forEach(row => {
-                let rowStr = "";
-                tableData.headers.forEach(header => {
-                    const cellContent = row[header];
-                    if (cellContent.type === 'input') {
-                        rowStr += `[INPUT ${cellContent.dataTestId}]` + '\t|\t';
-                    } else {
-                        rowStr += cellContent.value + '\t|\t';
-                    }
-                });
-                prompt += rowStr.slice(0, -3) + '\n'; // Убираем последний ' | '
-            });
-        } else if (nonTableInputsData.length > 0) {
-            prompt += "\nОтветь на следующие пункты:\n";
-            nonTableInputsData.forEach(inputData => {
-                prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
-            });
+    let rowStr = "";
+    tableData.headers.forEach(header => {
+        const cellContent = row[header]; // Получаем данные ячейки по имени заголовка
+        
+        if (cellContent) { // <--- ДОБАВЛЯЕМ ПРОВЕРКУ
+            if (cellContent.type === 'input') {
+                rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t'; // Добавляем NO_ID если dataTestId нет
+            } else {
+                rowStr += (cellContent.value || '(пусто)') + '\t|\t'; // Добавляем (пусто) если значения нет
+            }
+        } else {
+            rowStr += '(нет данных)' + '\t|\t'; // Если для заголовка вообще нет данных в строке
         }
-        return prompt;
+    });
+    prompt += rowStr.slice(0, -3) + '\n'; 
+}); return prompt;
     }
 
 
@@ -226,35 +224,44 @@ ${mainQuestionText}
                 tableData = { headers: [], rows: [] };
                 const rows = Array.from(tableElement.querySelectorAll('tr'));
                 if (rows.length > 0) {
-                    const headerRow = rows[0];
-                    const headerCells = Array.from(headerRow.querySelectorAll('th, td'));
-                    tableData.headers = headerCells.map(cell => cell.innerText.trim());
+    const headerRow = rows[0];
+    const headerCells = Array.from(headerRow.querySelectorAll('th, td'));
+    tableData.headers = headerCells.map(cell => cell.innerText.trim()).filter(h => h); // Убираем пустые заголовки, если есть
 
-                    const dataRows = rows.slice(1);
-                    dataRows.forEach(dataRow => {
-                        const cells = Array.from(dataRow.querySelectorAll('td'));
-                        const rowData = {};
-                        let rowHasInput = false;
-                        tableData.headers.forEach((header, cellIndex) => {
-                            const cell = cells[cellIndex];
-                            if (!cell) return;
-                            const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
-                            if (inputField) {
-                                rowHasInput = true;
-                                const inputInfo = {
-                                    type: 'input',
-                                    dataTestId: inputField.getAttribute('data-test-id'),
-                                    placeholder: inputField.getAttribute('placeholder')
-                                };
-                                rowData[header] = inputInfo;
-                                allInputsForDisplay.push(inputInfo);
-                            } else {
-                                rowData[header] = { type: 'data', value: cell.innerText.trim() };
-                            }
-                        });
-                        if(rowHasInput || Object.keys(rowData).length > 0) tableData.rows.push(rowData);
-                    });
-                }
+    const dataRows = rows.slice(1);
+    dataRows.forEach(dataRow => {
+        const cells = Array.from(dataRow.querySelectorAll('td'));
+        const rowData = {};
+        let rowHasInput = false;
+        // Убедимся, что для каждого заголовка есть соответствующая ячейка,
+        // или создадим заглушку, если ячеек меньше, чем заголовков
+        tableData.headers.forEach((header, cellIndex) => {
+            const cell = cells[cellIndex];
+            if (!cell) { // Если ячейки нет для этого заголовка
+                rowData[header] = { type: 'data', value: '(пусто)' }; // или другое значение по умолчанию
+                return;
+            }
+            
+            const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
+            if (inputField) {
+                rowHasInput = true;
+                const inputInfo = {
+                    type: 'input',
+                    dataTestId: inputField.getAttribute('data-test-id'),
+                    placeholder: inputField.getAttribute('placeholder')
+                };
+                rowData[header] = inputInfo;
+                allInputsForDisplay.push(inputInfo);
+            } else {
+                rowData[header] = { type: 'data', value: cell.innerText.trim() || '(пусто)' }; // Добавляем (пусто) если ячейка без текста
+            }
+        });
+        // Добавляем строку, только если она не пустая или содержит инпут
+        if(rowHasInput || Object.values(rowData).some(cell => cell.value && cell.value !== '(пусто)')) {
+            tableData.rows.push(rowData);
+        }
+    });
+}
                 if(tableData.rows.length === 0 && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) {
                     // Если в таблице не нашли инпутов, но они есть в блоке вне таблицы
                     tableData = null; // Считаем это не табличным вопросом

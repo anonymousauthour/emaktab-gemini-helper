@@ -137,19 +137,19 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
-    let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не включай в ответ никаких объяснений, рассуждений или промежуточных шагов.
-Если требуется числовой ответ, дай только число. Если дробь - только дробь (например, 3/40).
+    let prompt = `ВАЖНО: Предоставь ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ на поставленные вопросы или для заполнения ячеек.
+Не пиши объяснений, рассуждений или промежуточных шагов.
+Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).
 
-Формат ответа:
-Для таблиц: "Имя_колонки для Имя_первого_столбца=значение: твой_ответ" (если есть первый столбец с данными) ИЛИ "answer-X: твой_ответ" (если это единственное поле в строке/вопросе).
-Для нетабличных вопросов: "answer-X: твой_ответ" ИЛИ "метка_пункта: твой_ответ".
+Формат ответа для каждого поля ввода:
+"answer-X: значение_ответа" (где X - номер из data-test-id)
+ИЛИ "метка_вопроса: значение_ответа" (если метка более понятна).
 
-Примеры желаемого формата ответа:
+Примеры формата:
 answer-1: 28672
 answer-2: 5880
-W для x=5: 1/20
+W для x=5: 1/20 
 n для x=6: 4
-Среднее значение: 25
 
 ---
 ЗАДАНИЕ:
@@ -158,46 +158,35 @@ ${mainQuestionText}
 \n`;
 
     if (tableData && tableData.rows && tableData.rows.length > 0) {
-        prompt += "\nТаблица для заполнения:\n";
+        prompt += "\nТаблица для заполнения (предоставь значения для ячеек с [INPUT ...]):\n";
         if (tableData.headers && tableData.headers.length > 0) {
             prompt += tableData.headers.join('\t|\t') + '\n';
             prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
         }
         
-        tableData.rows.forEach((row, rowIndex) => {
+        tableData.rows.forEach((row) => {
             let rowStr = "";
-            const firstColHeader = tableData.headers.length ? tableData.headers[0] : null;
-            const firstColDataCell = firstColHeader ? row[firstColHeader] : null;
-            const firstColValue = (firstColDataCell && firstColDataCell.type === 'data' && firstColDataCell.value !== '(пусто)') ? firstColDataCell.value : null;
-
             (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
                 const cellContent = row[header]; 
                 if (cellContent) { 
                     if (cellContent.type === 'input') {
-                        let inputLabel = `[INPUT ${cellContent.dataTestId || 'NO_ID'}]`;
-                        if (firstColValue && header !== firstColHeader) { // Добавляем контекст, если это не первая колонка
-                            inputLabel = `[${header} для ${firstColHeader}=${firstColValue} (INPUT ${cellContent.dataTestId || 'NO_ID'})]`;
-                        }
-                        rowStr += inputLabel + '\t|\t';
+                        rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
                     } else {
-                        rowStr += (cellContent.value !== undefined ? cellContent.value : '(пусто)') + '\t|\t';
+                        rowStr += (cellContent.value !== undefined ? cellContent.value : '') + '\t|\t'; // (пусто) можно убрать, чтобы не сбивать Gemini
                     }
                 } else {
-                    rowStr += '(нет данных по заголовку)' + '\t|\t'; 
+                    rowStr += '' + '\t|\t'; // Пустая ячейка
                 }
             });
             prompt += rowStr.slice(0, -3) + '\n'; 
         });
-        prompt += "\nПредоставь значения для всех ячеек [INPUT ...].\n";
-
     } else if (nonTableInputsData.length > 0) {
-        prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого INPUT):\n";
+        prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого [INPUT ...]):\n";
         nonTableInputsData.forEach(inputData => {
             prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
         });
-        prompt += "\nПредоставь значения для всех [INPUT ...].\n";
     }
-    prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ, БЕЗ ОБЪЯСНЕНИЙ И ПРОМЕЖУТОЧНЫХ ШАГОВ.\n"; // Еще одно напоминание
+    prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ.\n";
     return prompt;
 }
 

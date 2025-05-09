@@ -9,511 +9,210 @@
     const GEMINI_API_KEY = 'AIzaSyB9vWInkcJrlGJmhRteOSthybGnSDUwfGw'; // !!! ОБЯЗАТЕЛЬНО ЗАМЕНИ НА СВОЙ КЛЮЧ !!!
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent?key=${GEMINI_API_KEY}`;
 
-    // --- Селекторы ---
-    const QUESTION_BLOCK_SELECTOR = '[data-test-id^="block-"]';
-    const LEXICAL_EDITOR_SELECTOR = 'div[data-lexical-editor="true"]';
-    const PARAGRAPH_SELECTOR = 'p';
-    const TEXT_SPAN_SELECTOR = 'span[data-lexical-text="true"]:not(:empty)';
-    const LEXICAL_DECORATOR_SELECTOR = 'span[data-lexical-decorator="true"]';
-    
-    const TABLE_SELECTOR_IN_BLOCK = 'table';
-    const ANSWER_INPUT_SELECTOR = 'input[data-test-id^="answer-"]';
-    const DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY = `span[data-lexical-decorator="true"]:has(${ANSWER_INPUT_SELECTOR})`;
-    
-    const MC_OPTION_SELECTOR = 'div[data-test-id^="answer-"]'; 
-    const MC_SELECTED_CLASS = 'GmaSD';
+    // --- Глобальные переменные для UI ---
+    let chatWindow = null;
+    let fileInput = null;
+    let textInput = null;
+    let chatOutput = null;
+    let sendButton = null;
+    let currentImageBase64 = null;
 
-    let currentBlockMcOptionElements = null; 
+    // --- Функции для UI ---
 
-    // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+    function createChatUI() {
+        if (document.getElementById('emaktab-ai-chat-window')) return; // Уже создан
 
-    function getFormulaTextFromDecorator(decoratorNode) {
-    if (!decoratorNode) return "";
+        chatWindow = document.createElement('div');
+        chatWindow.id = 'emaktab-ai-chat-window';
+        // Стили для окна чата (сделайте его маленьким и аккуратным)
+        Object.assign(chatWindow.style, {
+            position: 'fixed', bottom: '60px', right: '20px', width: '300px', maxHeight: '400px',
+            backgroundColor: 'white', border: '1px solid #ccc', borderRadius: '8px', boxShadow: '0 0 10px rgba(0,0,0,0.1)',
+            zIndex: '100000', display: 'flex', flexDirection: 'column', padding: '10px', overflow: 'hidden'
+        });
 
-    // 1. Сначала ищем LaTeX в <annotation> или data-атрибутах
-    // KaTeX может хранить LaTeX в <annotation encoding="application/x-tex">...</annotation>
-    // или в атрибуте data- όπως data-original-content или похожем
-    const katexNode = decoratorNode.querySelector('.katex'); // Основной контейнер KaTeX
-    if (katexNode) {
-        const annotationNode = katexNode.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="text/latex"]');
-        if (annotationNode && annotationNode.textContent) {
-            let latex = annotationNode.textContent.trim();
-            // Простые замены LaTeX на текст, можно расширять
-            latex = latex.replace(/\\frac{([^}]+)}{([^}]+)}/g, '($1)/($2)') // \frac{a}{b} -> (a)/(b)
-                         .replace(/\\cdot/g, '*')
-                         .replace(/\\times/g, '*')
-                         .replace(/\\leq/g, '<=')
-                         .replace(/\\geq/g, '>=')
-                         .replace(/\\neq/g, '!=')
-                         .replace(/\\pm/g, '±')
-                         .replace(/\\ldots/g, '...')
-                         .replace(/\\sqrt{([^}]+)}/g, 'sqrt($1)')
-                         // Убираем лишние {} и команды, которые не влияют на читаемость
-                         .replace(/[{}]/g, '')
-                         .replace(/\\[a-zA-Z]+\s?/g, ''); // Убираем команды типа \displaystyle, \ 
-            return latex.trim();
-        }
-        // Поиск в data-атрибутах самого katexNode или decoratorNode
-        let dataLatex = katexNode.getAttribute('data-latex') || katexNode.getAttribute('data-katex-source') ||
-                        decoratorNode.getAttribute('data-latex') || decoratorNode.getAttribute('data-katex-source');
-        if (dataLatex) {
-            // Применяем те же замены, что и для annotation
-             dataLatex = dataLatex.replace(/\\frac{([^}]+)}{([^}]+)}/g, '($1)/($2)')
-                               .replace(/\\cdot/g, '*') // и т.д.
-                               ;
-            return dataLatex.trim();
-        }
+        // Кнопка закрытия
+        const closeButton = document.createElement('button');
+        closeButton.textContent = '✖';
+        Object.assign(closeButton.style, {
+            position: 'absolute', top: '5px', right: '5px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '16px'
+        });
+        closeButton.onclick = () => chatWindow.style.display = 'none';
+        chatWindow.appendChild(closeButton);
+
+        chatOutput = document.createElement('div');
+        Object.assign(chatOutput.style, {
+            flexGrow: '1', overflowY: 'auto', marginBottom: '10px', border: '1px solid #eee', padding: '5px', fontSize: '12px'
+        });
+        chatOutput.innerHTML = '<i>Загрузите скриншот и задайте вопрос.</i>';
+        chatWindow.appendChild(chatOutput);
+
+        fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.accept = 'image/*';
+        fileInput.style.marginBottom = '5px';
+        fileInput.onchange = handleFileSelect;
+        chatWindow.appendChild(fileInput);
+
+        textInput = document.createElement('textarea');
+        textInput.placeholder = 'Ваш вопрос к скриншоту (необязательно)';
+        textInput.rows = 2;
+        Object.assign(textInput.style, {
+            width: 'calc(100% - 10px)', marginBottom: '5px', padding: '5px', border: '1px solid #ccc', borderRadius: '4px'
+        });
+        chatWindow.appendChild(textInput);
+
+        sendButton = document.createElement('button');
+        sendButton.textContent = 'Отправить Gemini';
+        Object.assign(sendButton.style, {
+            padding: '8px', backgroundColor: '#673ab7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer'
+        });
+        sendButton.onclick = handleSendToGemini;
+        chatWindow.appendChild(sendButton);
+
+        document.body.appendChild(chatWindow);
+        chatWindow.style.display = 'none'; // Сначала скрыт
     }
 
-    // 2. Если LaTeX не найден, пробуем alt из img
-    const imgInside = decoratorNode.querySelector('img');
-    if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
-        return imgInside.getAttribute('alt').trim();
-    }
-
-    // 3. Если и этого нет, берем innerText из .katex-html и делаем базовые замены
-    const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
-    if (katexHtmlNode) {
-        let rawText = katexHtmlNode.innerText.trim();
-        rawText = rawText.replace(/⋅/g, '*') 
-                         .replace(/−/g, '-')
-                         .replace(/–/g, '-')
-                         .replace(/\s+/g, " ");
-        
-        // Пробуем перевернуть простые дроби "знаменатель числитель"
-        // Это менее надежно, чем LaTeX, но лучше, чем ничего
-        const mfracNode = katexHtmlNode.querySelector('.mfrac');
-        if (mfracNode) {
-            const mfracText = mfracNode.innerText.trim().replace(/\s+/g, " ");
-            const mfracParts = mfracText.match(/^\s*(\d+)\s+(\d+)\s*$/);
-            if (mfracParts && mfracParts.length === 3) {
-                 return `(${mfracParts[2]}/${mfracParts[1]})`; // Оборачиваем в скобки
-            }
-        }
-        return rawText; // Возвращаем "сырой" текст из KaTeX, если это не простая дробь
-    }
-    
-    if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
-        return decoratorNode.innerText.trim().replace(/\s+/g, " ");
-    }
-    
-    return "[формула]";
-}
-    async function askGemini(fullPrompt) {
-        const promptLength = fullPrompt.length;
-        console.log(`Промпт для Gemini (длина: ${promptLength} символов).`);
-        if (promptLength < 2000) console.log("Полный промпт:", fullPrompt);
-        else console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
-        if (promptLength > 25000) console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая!`);
-        try {
-            const response = await fetch(GEMINI_API_URL, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] }),
-            });
-            if (!response.ok) {
-                const errorData = await response.json();
-                console.error('Gemini API Error:', response.status, errorData);
-                if (promptLength < 2000) console.error("Промпт, вызвавший ошибку:", fullPrompt);
-                const detailedError = errorData?.error?.message || JSON.stringify(errorData);
-                return `ОШИБКА API ${response.status}: ${detailedError}`;
-            }
-            const data = await response.json();
-            if (data.candidates && data.candidates[0]?.content?.parts?.[0]) {
-                const geminiResponseText = data.candidates[0].content.parts[0].text.trim();
-                console.log("Ответ от Gemini:", geminiResponseText);
-                return geminiResponseText;
-            } else if (data.promptFeedback && data.promptFeedback.blockReason) {
-                console.warn('Gemini API: Запрос заблокирован.', data.promptFeedback);
-                if (promptLength < 2000) console.warn("Промпт, вызвавший блокировку:", fullPrompt);
-                return `ЗАПРОС ЗАБЛОКИРОВАН: ${data.promptFeedback.blockReason}`;
-            } else {
-                console.warn('Gemini API: Некорректный формат ответа.', data);
-                return 'Нет ответа от Gemini';
-            }
-        } catch (error) {
-            console.error('Ошибка при запросе к Gemini API:', error);
-            if (promptLength < 2000) console.error("Промпт, при котором произошла сетевая ошибка:", fullPrompt);
-            return `Сетевая ошибка Gemini: ${error.message}`;
+    function toggleChatWindow() {
+        if (!chatWindow) createChatUI();
+        chatWindow.style.display = chatWindow.style.display === 'none' ? 'flex' : 'none';
+        if (chatWindow.style.display === 'flex') {
+            addMessageToChat('<i>Ожидание скриншота...</i>', 'system');
         }
     }
 
-    function displayAnswer(questionBlockElement, geminiAnswer, answerData) {
-        const existingDisplay = questionBlockElement.querySelector('.gemini-answer-display');
-        if (existingDisplay) existingDisplay.remove();
-        const answerDisplay = document.createElement('div');
-        answerDisplay.className = 'gemini-answer-display';
-        answerDisplay.style.marginTop = '15px';
-        answerDisplay.style.padding = '10px';
-        answerDisplay.style.border = '1px dashed blue';
-        answerDisplay.style.backgroundColor = '#f0f8ff';
-        answerDisplay.style.whiteSpace = 'pre-wrap';
-        answerDisplay.innerHTML = `<strong>🤖 Gemini:</strong><br>${geminiAnswer.replace(/\n/g, '<br>')}`;
-        const lexicalEditor = questionBlockElement.querySelector(LEXICAL_EDITOR_SELECTOR);
-        if (lexicalEditor) lexicalEditor.insertAdjacentElement('afterend', answerDisplay);
-        else questionBlockElement.appendChild(answerDisplay);
-        if (geminiAnswer.startsWith("ОШИБКА API") || geminiAnswer.startsWith("ЗАПРОС ЗАБЛОКИРОВАН")) return;
-        if (answerData.type === 'inputs' && answerData.inputs && answerData.inputs.length > 0) {
-            const lines = geminiAnswer.split('\n');
-            lines.forEach(line => {
-                const match = line.match(/(?:answer-|INPUT\s+)?([a-zA-Z0-9_ -À-ÿ]+?)\s*:\s*(.*)/i);
-                if (match) {
-                    let key = match[1].trim();
-                    const valueToInsert = match[2].trim();
-                    let inputElement;
-                    if (/^answer-\d+$/i.test(key) || /^\d+$/.test(key)) {
-                        const numMatch = key.match(/\d+$/);
-                        if (numMatch) {
-                           inputElement = questionBlockElement.querySelector(`input[data-test-id="answer-${numMatch[0]}"]`);
-                        }
-                    }
-                    if (!inputElement) {
-                        const foundInputData = answerData.inputs.find(inp =>
-                            (inp.context && inp.context.toLowerCase().includes(key.toLowerCase())) ||
-                            (inp.tableContext && inp.tableContext.header.toLowerCase() === key.toLowerCase()) ||
-                            (inp.dataTestId && inp.dataTestId.toLowerCase() === key.toLowerCase())
-                        );
-                         if (foundInputData) {
-                            inputElement = questionBlockElement.querySelector(`input[data-test-id="${foundInputData.dataTestId}"]`);
-                         }
-                    }
-                    if (inputElement) {
-                        const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                        nativeInputValueSetter.call(inputElement, valueToInsert);
-                        inputElement.dispatchEvent(new Event('focus', { bubbles: true }));
-                        inputElement.dispatchEvent(new Event('input', { bubbles: true, inputType: 'insertText' }));
-                        inputElement.dispatchEvent(new Event('change', { bubbles: true }));
-                        inputElement.style.backgroundColor = 'lightyellow';
-                    } else {
-                        console.warn(`Не найден input для ключа/метки "${key}" для вставки значения "${valueToInsert}".`);
-                    }
-                }
-            });
-        } else if (answerData.type === 'multipleChoice' && answerData.options && answerData.options.length > 0) {
-            const suggestedAnswerText = geminiAnswer.trim();
-            let selectedOptionElement = null;
-            if (suggestedAnswerText.length === 1 && /[A-ZА-ЯЁ]/i.test(suggestedAnswerText)) {
-                const optionIndex = suggestedAnswerText.toUpperCase().charCodeAt(0) - 'A'.charCodeAt(0);
-                if (optionIndex >= 0 && optionIndex < answerData.options.length) {
-                    selectedOptionElement = answerData.options[optionIndex].element;
-                }
+    function addMessageToChat(message, sender = 'user') {
+        if (!chatOutput) return;
+        const messageDiv = document.createElement('div');
+        messageDiv.style.marginBottom = '5px';
+        messageDiv.style.padding = '3px';
+        messageDiv.style.borderRadius = '3px';
+        if (sender === 'gemini') {
+            messageDiv.style.backgroundColor = '#e1f5fe';
+            messageDiv.innerHTML = `<b>Gemini:</b> ${message.replace(/\n/g, '<br>')}`;
+        } else if (sender === 'user') {
+            messageDiv.style.backgroundColor = '#f0f0f0';
+            messageDiv.innerHTML = `<b>Вы:</b> ${message}`;
+        } else { // system
+            messageDiv.innerHTML = `${message}`;
+        }
+        chatOutput.appendChild(messageDiv);
+        chatOutput.scrollTop = chatOutput.scrollHeight; // Прокрутка вниз
+    }
+
+    // --- Логика обработки ---
+
+    function handleFileSelect(event) {
+        const file = event.target.files[0];
+        if (file && file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                currentImageBase64 = e.target.result.split(',')[1]; // Получаем только Base64 данные
+                addMessageToChat('<img src="' + e.target.result + '" style="max-width:100%; max-height:150px;" alt="скриншот">', 'user-image');
+                addMessageToChat('<i>Скриншот загружен. Введите вопрос или нажмите "Отправить".</i>', 'system');
             }
-            if (!selectedOptionElement) {
-                for (const opt of answerData.options) {
-                    if (opt.text.toLowerCase() === suggestedAnswerText.toLowerCase() ||
-                        opt.text.toLowerCase().includes(suggestedAnswerText.toLowerCase()) ||
-                        suggestedAnswerText.toLowerCase().includes(opt.text.toLowerCase())) {
-                        selectedOptionElement = opt.element;
-                        break;
-                    }
-                }
-            }
-            if (selectedOptionElement) {
-                selectedOptionElement.click();
-                selectedOptionElement.style.outline = '2px solid green';
-                setTimeout(() => {
-                    if (selectedOptionElement.classList.contains(MC_SELECTED_CLASS)) {
-                        console.log(`Класс ${MC_SELECTED_CLASS} успешно применен после клика.`);
-                    } else {
-                        console.warn(`Класс ${MC_SELECTED_CLASS} НЕ применен после клика.`);
-                    }
-                }, 200);
-            } else {
-                console.warn(`Не удалось найти вариант ответа для "${suggestedAnswerText}"`);
-            }
+            reader.readAsDataURL(file);
+        } else {
+            currentImageBase64 = null;
+            addMessageToChat('<i>Ошибка: Пожалуйста, выберите файл изображения.</i>', 'system');
         }
     }
 
-    function extractMainQuestionText(block) {
-        const lexicalEditor = block.querySelector(LEXICAL_EDITOR_SELECTOR);
-        if (!lexicalEditor) return "";
-        let mainQuestionSegments = [];
-        const allChildNodesOfEditor = Array.from(lexicalEditor.childNodes);
-        for (const childNode of allChildNodesOfEditor) {
-            if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(PARAGRAPH_SELECTOR)) {
-                const p = childNode;
-                let isPartOfOption = false;
-                if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
-                    for (const mcOptEl of currentBlockMcOptionElements) {
-                        if (mcOptEl.contains(p) || p.contains(mcOptEl) || mcOptEl === p) {
-                            isPartOfOption = true; break;
-                        }
-                    }
-                }
-                if (isPartOfOption) continue;
-                let pTextContent = "";
-                Array.from(p.childNodes).forEach(node => {
-                    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
-                        pTextContent += node.textContent.trim() + " ";
-                    } else if (node.nodeType === Node.ELEMENT_NODE) {
-                        if (node.matches(TEXT_SPAN_SELECTOR)) {
-                            let spanIsOptionText = false;
-                            if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
-                                for (const mcOptEl of currentBlockMcOptionElements) {
-                                    if (mcOptEl.contains(node)) { spanIsOptionText = true; break; }
-                                }
-                            }
-                            if (!spanIsOptionText) pTextContent += node.innerText.trim() + " ";
-                        } else if (node.matches(LEXICAL_DECORATOR_SELECTOR)) {
-                            pTextContent += getFormulaTextFromDecorator(node) + " ";
-                        } else if (node.tagName === 'BR') {
-                            pTextContent += "\n";
-                        }
-                    }
-                });
-                if (pTextContent.trim()) mainQuestionSegments.push(pTextContent.trim());
-            } else if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
-                mainQuestionSegments.push(getFormulaTextFromDecorator(childNode));
-            }
-        }
-        return mainQuestionSegments.join(" ").trim().replace(/\s+\n\s+/g, "\n").replace(/\s+/g, ' ');
-    }
-    
-    function buildPrompt(mainQuestionText, typeData) {
-        let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не пиши объяснений или промежуточных шагов.\n`;
-        prompt += `Если в вопросе или вариантах ответа встречается конструкция "число1 число2" (два числа через пробел), ИНТЕРПРЕТИРУЙ это как дробь "число2/число1" (второе число делить на первое).\n`;
-
-        if (typeData.type === 'table') {
-            prompt += `Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).\nФормат ответа: "Имя_колонки для Имя_первого_столбца=значение: твой_ответ" или "answer-X: твой_ответ".\n\n`;
-            prompt += `ЗАДАНИЕ (таблица):\nОсновной вопрос:\n${mainQuestionText}\nТаблица для заполнения (предоставь значения для ячеек с [INPUT ...]):\n`;
-            if (typeData.data.headers && typeData.data.headers.length > 0) {
-                prompt += typeData.data.headers.join('\t|\t') + '\n';
-                prompt += '-'.repeat(typeData.data.headers.join('\t|\t').length) + '\n';
-            }
-            typeData.data.rows.forEach((row) => {
-                let rowStr = "";
-                (typeData.data.headers.length ? typeData.data.headers : Object.keys(row)).forEach(header => {
-                    const cellContent = row[header];
-                    if (cellContent) {
-                        if (cellContent.type === 'input') {
-                            rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
-                        } else {
-                            rowStr += (cellContent.value !== undefined ? cellContent.value : '') + '\t|\t';
-                        }
-                    } else { rowStr += '' + '\t|\t'; }
-                });
-                prompt += rowStr.slice(0, -3) + '\n';
-            });
-        } else if (typeData.type === 'inputs') {
-            prompt += `Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).\nФормат ответа: "answer-X: твой_ответ" или "метка_пункта: твой_ответ".\n\n`;
-            prompt += `ЗАДАНИЕ (список полей для ввода):\nОсновной вопрос:\n${mainQuestionText}\nОтветь на следующие пункты (дай только конечный ответ для каждого [INPUT ...]):\n`;
-            typeData.data.forEach(inputData => { prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`; });
-        } else if (typeData.type === 'multipleChoice') {
-            prompt += `Формат ответа: Укажи ТОЛЬКО БУКВУ (A, B, C, ...) правильного варианта ИЛИ ПОЛНЫЙ ТЕКСТ правильного варианта (если текст содержит дроби, используй формат "числитель/знаменатель").\n\n`;
-            prompt += `ЗАДАНИЕ (выбери один правильный вариант):\nОсновной вопрос:\n${mainQuestionText}\nВарианты ответов:\n`;
-            typeData.data.forEach((opt, i) => {
-                prompt += `${String.fromCharCode(65 + i)}. ${opt.text}\n`;
-            });
-        }
-        prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЙ ОТВЕТ.\n";
-        return prompt;
-    }
-
-    async function processQuestionsOnPage() {
-        const questionBlocks = document.querySelectorAll(QUESTION_BLOCK_SELECTOR);
-        if (questionBlocks.length === 0) {
-            console.log('eMaktab Solver: Блоки вопросов не найдены.');
-            alert('Блоки вопросов не найдены. Проверьте селекторы в скрипте.');
-            solveButton.textContent = '🔮 Решить с Gemini';
-            solveButton.disabled = false;
+    async function handleSendToGemini() {
+        if (!currentImageBase64) {
+            addMessageToChat('<i>Ошибка: Сначала загрузите скриншот.</i>', 'system');
             return;
         }
-        console.log(`eMaktab Solver: Найдено блоков вопросов: ${questionBlocks.length}. Обработка...`);
-        solveButton.textContent = `⏳ Обработка (0/${questionBlocks.length})...`;
-        let questionCounter = 0;
-        for (const block of questionBlocks) {
-            questionCounter++;
-            const blockId = block.getAttribute('data-test-id');
-            console.log(`\n--- Обработка блока #${questionCounter} (data-test-id: ${blockId}) ---`);
-            solveButton.textContent = `⏳ Обработка (${questionCounter}/${questionBlocks.length})...`;
-            currentBlockMcOptionElements = Array.from(block.querySelectorAll(MC_OPTION_SELECTOR));
-            const mainQuestionText = extractMainQuestionText(block);
-            const actualMcOptionElements = currentBlockMcOptionElements;
-            const tableElement = block.querySelector(TABLE_SELECTOR_IN_BLOCK);
-            const inputFields = Array.from(block.querySelectorAll(ANSWER_INPUT_SELECTOR));
-            let tableData = null;
-            let nonTableInputsData = [];
-            let mcOptionsData = [];
-            let allInputsForDisplay = { type: null, inputs: [], options: [] };
-            let hasInteractiveElements = false;
-
-            if (tableElement && inputFields.some(inp => tableElement.contains(inp))) {
-                console.log(`   Блок ${blockId} содержит таблицу с полями ввода.`);
-                tableData = { headers: [], rows: [] };
-                const rows = Array.from(tableElement.querySelectorAll('tr'));
-                if (rows.length > 0) {
-                    const headerRow = rows[0];
-                    const headerCells = Array.from(headerRow.querySelectorAll('th, td'));
-                    tableData.headers = headerCells.map(cell => (cell.innerText || "").trim()).filter(h => h);
-                    if (tableData.headers.length === 0 && headerCells.length > 0) {
-                        tableData.headers = headerCells.map((_, i) => `Колонка ${i + 1}`);
-                    }
-                    const dataRows = rows.slice(1);
-                    dataRows.forEach(dataRow => {
-                        const cells = Array.from(dataRow.querySelectorAll('td'));
-                        const rowData = {};
-                        let rowHasInput = false;
-                        let rowHasData = false;
-                        const currentHeaders = tableData.headers.length ? tableData.headers : cells.map((_,i) => `Колонка ${i+1}`);
-                        currentHeaders.forEach((header, cellIndex) => {
-                            const cell = cells[cellIndex];
-                            const firstColValue = cellIndex === 0 ? (cell ? (cell.innerText || "").trim() : '(нет значения)') : (cells[0] ? (cells[0].innerText || "").trim() : '(нет значения)');
-                            if (!cell) {
-                                rowData[header] = { type: 'data', value: '(ячейка отсутствует)' }; return;
-                            }
-                            const inputField = cell.querySelector(ANSWER_INPUT_SELECTOR);
-                            if (inputField) {
-                                rowHasInput = true;
-                                const inputInfo = { type: 'input', dataTestId: inputField.getAttribute('data-test-id'), placeholder: inputField.getAttribute('placeholder'), tableContext: { header: header, firstColValue: firstColValue } };
-                                rowData[header] = inputInfo;
-                                allInputsForDisplay.inputs.push(inputInfo);
-                            } else {
-                                const cellText = (cell.innerText || "").trim();
-                                rowData[header] = { type: 'data', value: cellText || '(пусто)' };
-                                if (cellText && cellText !== '(пусто)') rowHasData = true;
-                            }
-                        });
-                        if(rowHasInput || rowHasData) tableData.rows.push(rowData);
-                    });
-                }
-                if (tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'))) {
-                    hasInteractiveElements = true;
-                } else { tableData = null; }
-            }
-
-            const nonTableInputFields = inputFields.filter(inp => !allInputsForDisplay.inputs.some(existing => existing.dataTestId === inp.getAttribute('data-test-id')));
-            if (nonTableInputFields.length > 0) {
-                 console.log(`   Блок ${blockId} обрабатывается как список полей ввода (вне таблицы или таблицы нет).`);
-                const allParagraphsInLexical = Array.from(block.querySelectorAll(`${LEXICAL_EDITOR_SELECTOR} > ${PARAGRAPH_SELECTOR}`));
-                nonTableInputFields.forEach(inputEl => {
-                    const dataTestId = inputEl.getAttribute('data-test-id');
-                    let contextText = "";
-                    const parentPWithInput = inputEl.closest(PARAGRAPH_SELECTOR);
-                    if (parentPWithInput) {
-                        let pTextBeforeInput = "";
-                        for (const childNode of parentPWithInput.childNodes) {
-                            if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY)) break;
-                            if (childNode.textContent.trim()) pTextBeforeInput += childNode.textContent.trim() + " ";
-                        }
-                        if (pTextBeforeInput.trim()) contextText += `${pTextBeforeInput.trim()} `;
-                        const indexOfParentP = allParagraphsInLexical.indexOf(parentPWithInput);
-                        if (indexOfParentP > 0) {
-                            for (let i = indexOfParentP - 1; i >= 0; i--) {
-                                const prevP = allParagraphsInLexical[i];
-                                if (prevP.querySelector(ANSWER_INPUT_SELECTOR) || !prevP.innerText.trim() || (mainQuestionText && mainQuestionText.includes(prevP.innerText.trim()))) break;
-                                if (!prevP.querySelector(DECORATOR_SPAN_SELECTOR)) { contextText = `${prevP.innerText.trim()} ` + contextText; break; }
-                            }
-                        }
-                    }
-                    nonTableInputsData.push({ dataTestId, context: contextText || "(нет явного контекста)" });
-                    allInputsForDisplay.inputs.push({dataTestId, context: contextText || "(нет явного контекста)", type: 'input'});
-                });
-                if (nonTableInputsData.length > 0) hasInteractiveElements = true;
-            }
-            
-            if (allInputsForDisplay.inputs.length > 0 && !allInputsForDisplay.type) {
-                 allInputsForDisplay.type = 'inputs';
-            }
-
-            if (!hasInteractiveElements && actualMcOptionElements.length > 0) {
-                console.log(`   Блок ${blockId} обрабатывается как вопрос с выбором вариантов.`);
-                const options = actualMcOptionElements.map(optEl => {
-                    let combinedOptionText = "";
-                    Array.from(optEl.childNodes).forEach(childNode => {
-                        if (childNode.nodeType === Node.TEXT_NODE && childNode.textContent.trim()) {
-                            combinedOptionText += childNode.textContent.trim() + " ";
-                        } else if (childNode.nodeType === Node.ELEMENT_NODE) {
-                            if (childNode.matches(TEXT_SPAN_SELECTOR)) {
-                                combinedOptionText += childNode.innerText.trim() + " ";
-                            } else if (childNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
-                                combinedOptionText += getFormulaTextFromDecorator(childNode) + " ";
-                            } else if (childNode.querySelector(TEXT_SPAN_SELECTOR) || childNode.querySelector(LEXICAL_DECORATOR_SELECTOR)) {
-                                 Array.from(childNode.querySelectorAll(`${TEXT_SPAN_SELECTOR}, ${LEXICAL_DECORATOR_SELECTOR}`)).forEach(innerNode => {
-                                     if (innerNode.matches(TEXT_SPAN_SELECTOR)) {
-                                        combinedOptionText += innerNode.innerText.trim() + " ";
-                                    } else if (innerNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
-                                        combinedOptionText += getFormulaTextFromDecorator(innerNode) + " ";
-                                    }
-                                 });
-                            }
-                        }
-                    });
-                    return {
-                        text: combinedOptionText.trim().replace(/\s+/g, ' ') || "(текст варианта не извлечен)",
-                        element: optEl,
-                        dataTestId: optEl.getAttribute('data-test-id')
-                    };
-                });
-                if (options.some(opt => opt.text && opt.text !== "(текст варианта не извлечен)")) {
-                    mcOptionsData = options;
-                    allInputsForDisplay = { type: 'multipleChoice', options: mcOptionsData, inputs: [] };
-                    hasInteractiveElements = true;
-                } else {
-                     console.warn(`   В блоке ${blockId} найдены элементы вариантов выбора, но не удалось извлечь текст вариантов.`);
-                }
-            }
-
-            if (!hasInteractiveElements) {
-                console.log(`   Блок ${blockId} не содержит интерактивных элементов для решения Gemini. Пропускаем.`);
-                displayAnswer(block, "(Этот блок не содержит интерактивных элементов для решения)", {type: null});
-                if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
-                continue;
-            }
-            
-            const currentMainQuestionText = mainQuestionText || "(Нет основного текста вопроса)";
-            let promptDataPayload;
-            if (allInputsForDisplay.type === 'multipleChoice') {
-                promptDataPayload = { type: 'multipleChoice', data: mcOptionsData };
-            } else if (tableData && tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'))) {
-                promptDataPayload = { type: 'table', data: tableData };
-            } else if (nonTableInputsData.length > 0 || allInputsForDisplay.inputs.length > 0) {
-                promptDataPayload = { type: 'inputs', data: nonTableInputsData.length > 0 ? nonTableInputsData : allInputsForDisplay.inputs };
-            } else {
-                 console.warn(`   Не удалось определить тип данных для промпта блока ${blockId}. Пропускаем.`);
-                 if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
-                 continue;
-            }
-
-            const prompt = buildPrompt(currentMainQuestionText, promptDataPayload);
-            const geminiAnswer = await askGemini(prompt);
-            displayAnswer(block, geminiAnswer, allInputsForDisplay);
-
-            if (questionCounter < questionBlocks.length) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-        }
-        console.log('eMaktab Solver: Все вопросы на странице обработаны.');
-        solveButton.textContent = '✅ Готово! Решить снова?';
-        solveButton.disabled = false;
-    }
-
-    const solveButton = document.createElement('button');
-    solveButton.textContent = '🔮 Решить с Gemini';
-    solveButton.style.position = 'fixed';
-    solveButton.style.bottom = '20px';
-    solveButton.style.right = '20px';
-    solveButton.style.zIndex = '99999';
-    solveButton.style.padding = '12px 20px';
-    solveButton.style.backgroundColor = '#673ab7';
-    solveButton.style.color = 'white';
-    solveButton.style.border = 'none';
-    solveButton.style.borderRadius = '8px';
-    solveButton.style.cursor = 'pointer';
-    solveButton.style.fontSize = '16px';
-    solveButton.style.boxShadow = '0 4px 8px rgba(0,0,0,0.2)';
-    solveButton.id = 'gemini-solve-button';
-
-    solveButton.addEventListener('click', async () => {
         if (GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY_HERE') {
             alert('Пожалуйста, вставьте ваш API ключ Gemini в скрипт!');
             return;
         }
-        solveButton.disabled = true;
-        solveButton.textContent = '⏳ Загрузка...';
-        await processQuestionsOnPage();
-    });
 
-    if (!document.getElementById('gemini-solve-button')) {
-        document.body.appendChild(solveButton);
+        const userText = textInput.value.trim();
+        let promptForGemini = "Проанализируй это изображение.";
+        if (userText) {
+            promptForGemini = userText + "\n\nКонтекст изображения ниже:";
+        }
+        
+        addMessageToChat(userText || '(Отправлен только скриншот)', 'user');
+        sendButton.disabled = true;
+        sendButton.textContent = '⏳ Отправка...';
+        chatOutput.scrollTop = chatOutput.scrollHeight;
+
+        const requestBody = {
+            contents: [
+                {
+                    parts: [
+                        { text: promptForGemini },
+                        {
+                            inline_data: {
+                                mime_type: "image/png", // Или image/jpeg, в зависимости от скриншота
+                                data: currentImageBase64
+                            }
+                        }
+                    ]
+                }
+            ],
+            // generationConfig: { temperature: 0.4, maxOutputTokens: 1024 } // Можно настроить
+        };
+
+        try {
+            const response = await fetch(GEMINI_API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody),
+            });
+
+            sendButton.disabled = false;
+            sendButton.textContent = 'Отправить Gemini';
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Gemini API Error:', response.status, errorData);
+                const detailedError = errorData?.error?.message || JSON.stringify(errorData);
+                addMessageToChat(`ОШИБКА API ${response.status}: ${detailedError}`, 'gemini');
+                return;
+            }
+
+            const data = await response.json();
+            if (data.candidates && data.candidates[0]?.content?.parts?.[0]) {
+                const geminiResponseText = data.candidates[0].content.parts[0].text.trim();
+                addMessageToChat(geminiResponseText, 'gemini');
+            } else if (data.promptFeedback && data.promptFeedback.blockReason) {
+                addMessageToChat(`ЗАПРОС ЗАБЛОКИРОВАН: ${data.promptFeedback.blockReason}`, 'gemini');
+            } else {
+                addMessageToChat('Нет ответа от Gemini или некорректный формат.', 'gemini');
+            }
+        } catch (error) {
+            console.error('Ошибка при запросе к Gemini API:', error);
+            sendButton.disabled = false;
+            sendButton.textContent = 'Отправить Gemini';
+            addMessageToChat(`Сетевая ошибка: ${error.message}`, 'gemini');
+        }
+        // Очистка для следующего запроса
+        currentImageBase64 = null;
+        fileInput.value = ""; // Сбрасываем input file
+        textInput.value = "";
     }
+
+
+    // --- Создание кнопки для вызова чата ---
+    const helperButton = document.createElement('button');
+    helperButton.textContent = '💬 AI';
+    Object.assign(helperButton.style, {
+        position: 'fixed', bottom: '20px', right: '20px', zIndex: '99998',
+        padding: '8px 12px', backgroundColor: '#007bff', color: 'white',
+        border: 'none', borderRadius: '20px', cursor: 'pointer', fontSize: '14px',
+        boxShadow: '0 2px 5px rgba(0,0,0,0.2)'
+    });
+    helperButton.id = 'emaktab-ai-helper-button';
+    helperButton.onclick = toggleChatWindow;
+
+    if (!document.getElementById('emaktab-ai-helper-button')) {
+        document.body.appendChild(helperButton);
+    }
+    // Первоначальное создание UI чата (скрытого)
+    createChatUI();
+
 })();

@@ -1,39 +1,70 @@
+// Файл: emaktab-solver.js (ПОЛНАЯ ВЕРСИЯ с улучшенной обработкой формул)
+
 (async function() {
     'use strict';
+
     console.log('eMaktab Solver Script: Запущен.');
+
+    // --- НАСТРОЙКИ ---
     const GEMINI_API_KEY = 'AIzaSyB9vWInkcJrlGJmhRteOSthybGnSDUwfGw'; // !!! ОБЯЗАТЕЛЬНО ЗАМЕНИ НА СВОЙ КЛЮЧ !!!
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent?key=${GEMINI_API_KEY}`;
+
+    // --- Селекторы ---
     const QUESTION_BLOCK_SELECTOR = '[data-test-id^="block-"]';
     const LEXICAL_EDITOR_SELECTOR = 'div[data-lexical-editor="true"]';
     const PARAGRAPH_SELECTOR = 'p';
     const TEXT_SPAN_SELECTOR = 'span[data-lexical-text="true"]:not(:empty)';
+    const LEXICAL_DECORATOR_SELECTOR = 'span[data-lexical-decorator="true"]'; // Обычно это span.editor-equation
+    
     const TABLE_SELECTOR_IN_BLOCK = 'table';
     const ANSWER_INPUT_SELECTOR = 'input[data-test-id^="answer-"]';
     const DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY = `span[data-lexical-decorator="true"]:has(${ANSWER_INPUT_SELECTOR})`;
-    const DECORATOR_SPAN_SELECTOR = 'span[data-lexical-decorator="true"]';
-    const MC_OPTION_SELECTOR = 'div[data-test-id^="answer-"]';
-    const MC_OPTION_TEXT_SELECTOR = 'span[data-lexical-text="true"]';
+    // const DECORATOR_SPAN_SELECTOR = 'span[data-lexical-decorator="true"]'; // Общий декоратор (используется в extractMainQuestionText для отсечения)
+
+    const MC_OPTION_SELECTOR = 'div[data-test-id^="answer-"]'; 
+    // MC_OPTION_TEXT_SELECTOR больше не нужен как отдельная константа, так как логика сложнее
     const MC_SELECTED_CLASS = 'GmaSD';
+
     let currentBlockMcOptionElements = null;
+
+    // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+
+    function getFormulaTextFromDecorator(decoratorNode) {
+        if (!decoratorNode) return "";
+        let latexSource = decoratorNode.getAttribute('data-latex') || 
+                          decoratorNode.getAttribute('data-katex-source') ||
+                          decoratorNode.getAttribute('data-equation');
+        if (latexSource) return latexSource; 
+        const katexHtmlNode = decoratorNode.querySelector('.katex-html'); // KaTeX обычно имеет такой класс
+        if (katexHtmlNode) {
+            let text = katexHtmlNode.innerText.trim().replace(/\s+/g, ' ');
+            const parts = text.split(' ');
+            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+                 if (katexHtmlNode.querySelector('.mfrac')) { // mfrac - класс KaTeX для дробей
+                    return `${parts[1]}/${parts[0]}`; // Предполагаем "знаменатель числитель" -> "числитель/знаменатель"
+                 }
+            }
+            return text; // Возвращаем как есть, если не дробь или другой формат
+        }
+        const imgInside = decoratorNode.querySelector('img');
+        if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
+            return imgInside.getAttribute('alt').trim();
+        }
+        return ""; 
+    }
 
     async function askGemini(fullPrompt) {
         const promptLength = fullPrompt.length;
         console.log(`Промпт для Gemini (длина: ${promptLength} символов).`);
-        if (promptLength < 2000) {
-            console.log("Полный промпт:", fullPrompt);
-        } else {
-            console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
-        }
-        if (promptLength > 25000) {
-            console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая!`);
-        }
+        if (promptLength < 2000) console.log("Полный промпт:", fullPrompt);
+        else console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
+        if (promptLength > 25000) console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая!`);
+
         try {
             const response = await fetch(GEMINI_API_URL, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    contents: [{ parts: [{ text: fullPrompt }] }],
-                }),
+                body: JSON.stringify({ contents: [{ parts: [{ text: fullPrompt }] }] }),
             });
             if (!response.ok) {
                 const errorData = await response.json();
@@ -155,27 +186,53 @@
     function extractMainQuestionText(block) {
         const lexicalEditor = block.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (!lexicalEditor) return "";
-        
         let mainQuestionSegments = [];
-        const allTextSpans = Array.from(lexicalEditor.querySelectorAll(TEXT_SPAN_SELECTOR));
+        const allChildNodesOfEditor = Array.from(lexicalEditor.childNodes);
 
-        allTextSpans.forEach(span => {
-            let isPartOfOption = false;
-            if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
-                for (const mcOptEl of currentBlockMcOptionElements) {
-                    if (mcOptEl.contains(span)) {
-                        isPartOfOption = true;
-                        break;
+        for (const childNode of allChildNodesOfEditor) {
+            if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(PARAGRAPH_SELECTOR)) {
+                const p = childNode;
+                let isPartOfOption = false;
+                if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
+                    for (const mcOptEl of currentBlockMcOptionElements) {
+                        if (mcOptEl.contains(p) || p.contains(mcOptEl) || mcOptEl === p) {
+                             // Если p является частью MC опции, то его текст не является основным вопросом
+                            isPartOfOption = true;
+                            break;
+                        }
                     }
                 }
+                if (isPartOfOption) continue;
+
+                let pTextContent = "";
+                Array.from(p.childNodes).forEach(node => {
+                    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                        pTextContent += node.textContent.trim() + " ";
+                    } else if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.matches(TEXT_SPAN_SELECTOR)) {
+                            let spanIsOptionText = false;
+                            if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
+                                for (const mcOptEl of currentBlockMcOptionElements) {
+                                    if (mcOptEl.contains(node)) { spanIsOptionText = true; break; }
+                                }
+                            }
+                            if (!spanIsOptionText) pTextContent += node.innerText.trim() + " ";
+                        } else if (node.matches(LEXICAL_DECORATOR_SELECTOR)) {
+                            pTextContent += getFormulaTextFromDecorator(node) + " ";
+                        } else if (node.tagName === 'BR') {
+                            pTextContent += "\n";
+                        }
+                    }
+                });
+                if (pTextContent.trim()) {
+                    mainQuestionSegments.push(pTextContent.trim());
+                }
+            } else if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
+                // Обработка декораторов, которые могут быть прямыми потомками lexicalEditor
+                mainQuestionSegments.push(getFormulaTextFromDecorator(childNode));
             }
-            
-            if (!isPartOfOption) {
-                mainQuestionSegments.push(span.innerText.trim());
-            }
-        });
-        
-        return mainQuestionSegments.join(" ").trim();
+        }
+        return mainQuestionSegments.join(" ").trim().replace(/\s+\n\s+/g, "\n").replace(/\s+/g, ' ');
     }
     
     function buildPrompt(mainQuestionText, typeData) {
@@ -233,16 +290,9 @@
             const blockId = block.getAttribute('data-test-id');
             console.log(`\n--- Обработка блока #${questionCounter} (data-test-id: ${blockId}) ---`);
             solveButton.textContent = `⏳ Обработка (${questionCounter}/${questionBlocks.length})...`;
-            
-            // СНАЧАЛА находим mcOptionElements для использования в extractMainQuestionText
-            currentBlockMcOptionElements = Array.from(block.querySelectorAll(MC_OPTION_SELECTOR)); 
-            
+            currentBlockMcOptionElements = Array.from(block.querySelectorAll(MC_OPTION_SELECTOR));
             const mainQuestionText = extractMainQuestionText(block);
-            
-            // Затем можно использовать currentBlockMcOptionElements дальше или переприсвоить в actualMcOptionElements
-            const actualMcOptionElements = currentBlockMcOptionElements; 
-            // currentBlockMcOptionElements = null; // Можно не сбрасывать, он перезапишется на след. итерации
-
+            const actualMcOptionElements = currentBlockMcOptionElements;
             const tableElement = block.querySelector(TABLE_SELECTOR_IN_BLOCK);
             const inputFields = Array.from(block.querySelectorAll(ANSWER_INPUT_SELECTOR));
             let tableData = null;
@@ -325,18 +375,40 @@
                 if (nonTableInputsData.length > 0) hasInteractiveElements = true;
             }
             
-            if (allInputsForDisplay.inputs.length > 0) { // Если есть хоть какие-то инпуты (табличные или нетабличные)
+            if (allInputsForDisplay.inputs.length > 0 && !allInputsForDisplay.type) {
                  allInputsForDisplay.type = 'inputs';
             }
 
             if (!hasInteractiveElements && actualMcOptionElements.length > 0) {
                 console.log(`   Блок ${blockId} обрабатывается как вопрос с выбором вариантов.`);
-                const options = actualMcOptionElements.map(optEl => ({
-                    text: (optEl.querySelector(MC_OPTION_TEXT_SELECTOR) || optEl).innerText.trim(),
-                    element: optEl,
-                    dataTestId: optEl.getAttribute('data-test-id')
-                }));
-                if (options.some(opt => opt.text)) {
+                const options = actualMcOptionElements.map(optEl => {
+                    let combinedOptionText = "";
+                    Array.from(optEl.childNodes).forEach(childNode => {
+                        if (childNode.nodeType === Node.TEXT_NODE && childNode.textContent.trim()) {
+                            combinedOptionText += childNode.textContent.trim() + " ";
+                        } else if (childNode.nodeType === Node.ELEMENT_NODE) {
+                            if (childNode.matches(TEXT_SPAN_SELECTOR)) {
+                                combinedOptionText += childNode.innerText.trim() + " ";
+                            } else if (childNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
+                                combinedOptionText += getFormulaTextFromDecorator(childNode) + " ";
+                            } else if (childNode.querySelector(TEXT_SPAN_SELECTOR) || childNode.querySelector(LEXICAL_DECORATOR_SELECTOR)) {
+                                 Array.from(childNode.querySelectorAll(`${TEXT_SPAN_SELECTOR}, ${LEXICAL_DECORATOR_SELECTOR}`)).forEach(innerNode => {
+                                     if (innerNode.matches(TEXT_SPAN_SELECTOR)) {
+                                        combinedOptionText += innerNode.innerText.trim() + " ";
+                                    } else if (innerNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
+                                        combinedOptionText += getFormulaTextFromDecorator(innerNode) + " ";
+                                    }
+                                 });
+                            }
+                        }
+                    });
+                    return {
+                        text: combinedOptionText.trim().replace(/\s+/g, ' ') || "(текст варианта не извлечен)",
+                        element: optEl,
+                        dataTestId: optEl.getAttribute('data-test-id')
+                    };
+                });
+                if (options.some(opt => opt.text && opt.text !== "(текст варианта не извлечен)")) {
                     mcOptionsData = options;
                     allInputsForDisplay = { type: 'multipleChoice', options: mcOptionsData, inputs: [] };
                     hasInteractiveElements = true;
@@ -351,17 +423,17 @@
                 if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
                 continue;
             }
-
+            
             const currentMainQuestionText = mainQuestionText || "(Нет основного текста вопроса)";
             let promptDataPayload;
             if (allInputsForDisplay.type === 'multipleChoice') {
                 promptDataPayload = { type: 'multipleChoice', data: mcOptionsData };
             } else if (tableData && tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'))) {
                 promptDataPayload = { type: 'table', data: tableData };
-            } else if (nonTableInputsData.length > 0) {
-                promptDataPayload = { type: 'inputs', data: nonTableInputsData };
+            } else if (nonTableInputsData.length > 0 || allInputsForDisplay.inputs.length > 0) { // Учитываем и те инпуты, что могли быть только в allInputsForDisplay
+                promptDataPayload = { type: 'inputs', data: nonTableInputsData.length > 0 ? nonTableInputsData : allInputsForDisplay.inputs };
             } else {
-                 console.warn(`   Не удалось определить тип данных для промпта блока ${blockId}.`);
+                 console.warn(`   Не удалось определить тип данных для промпта блока ${blockId}. Пропускаем.`);
                  if (questionCounter < questionBlocks.length) await new Promise(resolve => setTimeout(resolve, 50));
                  continue;
             }

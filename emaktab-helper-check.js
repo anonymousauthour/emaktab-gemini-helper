@@ -29,120 +29,6 @@
 
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
-    // --- Новая, более "умная" функция для извлечения текста из KaTeX ---
-function parseKatexNodeRecursive(node) {
-    let text = "";
-    if (!node) return "";
-
-    // 1. Обработка дробей (.mfrac)
-    if (node.matches && node.matches('.mfrac')) {
-        // KaTeX для \frac{a}{b} обычно имеет два основных дочерних элемента (или группы элементов)
-        // для числителя и знаменателя. Структура может быть сложной.
-        // Простой подход: найти два "основных" текстовых блока внутри.
-        // Это ОЧЕНЬ СИЛЬНОЕ УПРОЩЕНИЕ и может потребовать адаптации под конкретный HTML eMaktab!
-        
-        // Ищем контейнеры для числителя и знаменателя.
-        // KaTeX часто использует .vlist-t для вертикального позиционирования.
-        // Числитель обычно в первом .vlist-t (или его потомках), знаменатель - в одном из последующих.
-        const childSpans = Array.from(node.children).filter(el => el.matches('span')); // Берем только span-потомки mfrac
-        let numeratorText = "";
-        let denominatorText = "";
-
-        if (childSpans.length >= 2) {
-            // Пытаемся извлечь текст из предполагаемых областей числителя и знаменателя
-            // Первая группа элементов (до линии дроби, если она есть) - числитель
-            // Вторая группа (после линии дроби) - знаменатель
-            // Это очень эвристично!
-            const fracLine = node.querySelector('.frac-line');
-            let foundFracLine = false;
-            let tempNumerator = "";
-            let tempDenominator = "";
-
-            for (const child of Array.from(node.childNodes)) { // Обходим всех детей mfrac
-                if (fracLine && child === fracLine) {
-                    foundFracLine = true;
-                    continue;
-                }
-                if (!foundFracLine) {
-                    tempNumerator += parseKatexNodeRecursive(child);
-                } else {
-                    tempDenominator += parseKatexNodeRecursive(child);
-                }
-            }
-            
-            if (tempNumerator.trim() && tempDenominator.trim()) {
-                numeratorText = tempNumerator.trim();
-                denominatorText = tempDenominator.trim();
-            } else { // Если frac-line не помогла, пробуем просто по порядку вложенных span (менее надежно)
-                let potentialParts = [];
-                Array.from(node.querySelectorAll('span.mord')).forEach(mord => {
-                    if (mord.innerText.trim()) potentialParts.push(mord.innerText.trim());
-                });
-                if (potentialParts.length >= 2) {
-                    numeratorText = potentialParts[0];
-                    denominatorText = potentialParts[1];
-                }
-            }
-
-
-            if (numeratorText && denominatorText) {
-                return `(${numeratorText}/${denominatorText})`; // Оборачиваем в скобки для ясности
-            }
-        }
-        // Если не удалось распарсить как дробь, возвращаем внутренний текст всего mfrac
-        return node.innerText.trim().replace(/\s+/g, ' ');
-    }
-
-    // 2. Обработка символов и текста
-    if (node.nodeType === Node.TEXT_NODE) {
-        return node.textContent.trim();
-    }
-
-    if (node.nodeType === Node.ELEMENT_NODE) {
-        // Простые текстовые элементы KaTeX (цифры, переменные) часто в .mord
-        if (node.matches && (node.matches('.mord') || node.matches('.mn') || node.matches('.mi'))) {
-            return node.innerText.trim();
-        }
-        // Символы операций
-        if (node.matches && node.matches('.mspace')) { // Пробелы KaTeX
-             if (node.style.marginRight && parseFloat(node.style.marginRight) > 0.2) return " "; // Значимый пробел
-             return ""; // Маленькие пробелы игнорируем
-        }
-        if (node.matches && node.matches('.mbin, .mrel')) { // Бинарные операторы (+, -, =, <, >) и отношения
-            let op = node.innerText.trim();
-            if (op === '⋅') return ' * ';
-            if (op === '−') return ' - ';
-            if (op === '–') return ' - '; // Тире тоже может быть минусом
-            if (op === '=') return ' = ';
-            if (op === '<') return ' < ';
-            if (op === '>') return ' > ';
-            if (op === '≤') return ' <= ';
-            if (op === '≥') return ' >= ';
-            if (op === '±') return ' ± ';
-            if (op === '≠') return ' != ';
-            // Добавьте другие символы по мере необходимости
-            return ` ${op} `; // Обрамляем пробелами
-        }
-        // Корни, степени и т.д. - пока просто берем их innerText
-        // Это потребует более сложного парсинга, если нужно точное представление
-        if (node.matches && (node.matches('.sqrt') || node.matches('.vlist .pstrut ~ span sup'))) { // Корень или степень
-            return node.innerText.trim().replace(/\s+/g, ''); // Убираем пробелы внутри корня/степени
-        }
-
-        // Если это контейнер без специфической роли, обходим его детей
-        let childText = "";
-        if (node.childNodes && node.childNodes.length > 0) {
-            node.childNodes.forEach(child => {
-                childText += parseKatexNodeRecursive(child);
-            });
-        } else if (node.innerText) { // Запасной вариант, если нет детей, но есть текст
-            childText = node.innerText.trim();
-        }
-        return childText;
-    }
-    return "";
-}
-
 function getFormulaTextFromDecorator(decoratorNode) {
     if (!decoratorNode) return "";
 
@@ -158,10 +44,59 @@ function getFormulaTextFromDecorator(decoratorNode) {
 
     const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
     if (katexHtmlNode) {
-        return parseKatexNodeRecursive(katexHtmlNode).replace(/\s+/g, " ").trim();
+        const mfracNode = katexHtmlNode.querySelector('.mfrac');
+        if (mfracNode) {
+            const vlistTNodes = Array.from(mfracNode.children).filter(el => el.matches && el.matches('span.vlist-t'));
+            
+            if (vlistTNodes.length >= 2) { // Ожидаем как минимум 2 блока .vlist-t (для числителя и знаменателя)
+                                          // Третий может быть линией, если он не первый и не последний.
+                let numeratorNode = null;
+                let denominatorNode = null;
+
+                // Числитель обычно в первом .vlist-t
+                numeratorNode = vlistTNodes[0].querySelector('span.mord.mtight > span.mord.mtight'); 
+                if (!numeratorNode) numeratorNode = vlistTNodes[0].querySelector('span.mord.mtight'); // Запасной вариант
+
+                // Знаменатель обычно в последнем .vlist-t (или предпоследнем, если линия дроби последняя)
+                // Более надежно - последний .vlist-t, который содержит нужную структуру
+                for (let i = vlistTNodes.length - 1; i >= 0; i--) {
+                    const potentialDenom = vlistTNodes[i].querySelector('span.mord.mtight > span.mord.mtight') || vlistTNodes[i].querySelector('span.mord.mtight');
+                    if (potentialDenom) {
+                        denominatorNode = potentialDenom;
+                        // Убедимся, что это не тот же узел, что и числитель (если всего один .vlist-t с числом)
+                        if (numeratorNode && denominatorNode === numeratorNode && vlistTNodes.length < 2){
+                             denominatorNode = null; // Это не дробь, а просто число
+                        }
+                        break;
+                    }
+                }
+                // Если первый и последний .vlist-t дали одно и то же (т.е. не дробь, а просто выражение), то это не дробь.
+                if (numeratorNode && denominatorNode && numeratorNode.isSameNode(denominatorNode) && vlistTNodes.length <=2 ) {
+                     // Это может быть не дробь, а просто число. Вернем его.
+                     const singleNumber = numeratorNode.innerText.trim();
+                     if (singleNumber && !isNaN(singleNumber)) return singleNumber;
+                }
+
+
+                if (numeratorNode && denominatorNode) {
+                    const numText = numeratorNode.innerText.trim();
+                    const denText = denominatorNode.innerText.trim();
+                    if (numText && denText && !isNaN(numText) && !isNaN(denText)) {
+                        return `${numText}/${denText}`;
+                    }
+                }
+                console.warn("Не удалось точно извлечь числитель/знаменатель из .mfrac для:", decoratorNode.innerHTML.substring(0,150));
+            }
+        }
+
+        // Если не .mfrac или парсинг не удался, используем innerText всего .katex-html и заменяем символы
+        let rawText = katexHtmlNode.innerText.trim();
+        rawText = rawText.replace(/⋅/g, '*') 
+                         .replace(/−/g, '-')
+                         .replace(/\s+/g, " "); 
+        return rawText;
     }
     
-    // Если ничего из вышеперечисленного, но есть текст в самом декораторе
     if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
         return decoratorNode.innerText.trim().replace(/\s+/g, " ");
     }

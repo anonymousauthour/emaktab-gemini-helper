@@ -30,53 +30,67 @@
     function getFormulaTextFromDecorator(decoratorNode) {
     if (!decoratorNode) return "";
 
-    let latexSource = decoratorNode.getAttribute('data-latex') || 
-                      decoratorNode.getAttribute('data-katex-source') ||
-                      decoratorNode.getAttribute('data-equation');
-    if (latexSource) return latexSource.trim(); 
+    // 1. Сначала ищем LaTeX в <annotation> или data-атрибутах
+    // KaTeX может хранить LaTeX в <annotation encoding="application/x-tex">...</annotation>
+    // или в атрибуте data- όπως data-original-content или похожем
+    const katexNode = decoratorNode.querySelector('.katex'); // Основной контейнер KaTeX
+    if (katexNode) {
+        const annotationNode = katexNode.querySelector('annotation[encoding="application/x-tex"], annotation[encoding="text/latex"]');
+        if (annotationNode && annotationNode.textContent) {
+            let latex = annotationNode.textContent.trim();
+            // Простые замены LaTeX на текст, можно расширять
+            latex = latex.replace(/\\frac{([^}]+)}{([^}]+)}/g, '($1)/($2)') // \frac{a}{b} -> (a)/(b)
+                         .replace(/\\cdot/g, '*')
+                         .replace(/\\times/g, '*')
+                         .replace(/\\leq/g, '<=')
+                         .replace(/\\geq/g, '>=')
+                         .replace(/\\neq/g, '!=')
+                         .replace(/\\pm/g, '±')
+                         .replace(/\\ldots/g, '...')
+                         .replace(/\\sqrt{([^}]+)}/g, 'sqrt($1)')
+                         // Убираем лишние {} и команды, которые не влияют на читаемость
+                         .replace(/[{}]/g, '')
+                         .replace(/\\[a-zA-Z]+\s?/g, ''); // Убираем команды типа \displaystyle, \ 
+            return latex.trim();
+        }
+        // Поиск в data-атрибутах самого katexNode или decoratorNode
+        let dataLatex = katexNode.getAttribute('data-latex') || katexNode.getAttribute('data-katex-source') ||
+                        decoratorNode.getAttribute('data-latex') || decoratorNode.getAttribute('data-katex-source');
+        if (dataLatex) {
+            // Применяем те же замены, что и для annotation
+             dataLatex = dataLatex.replace(/\\frac{([^}]+)}{([^}]+)}/g, '($1)/($2)')
+                               .replace(/\\cdot/g, '*') // и т.д.
+                               ;
+            return dataLatex.trim();
+        }
+    }
 
+    // 2. Если LaTeX не найден, пробуем alt из img
     const imgInside = decoratorNode.querySelector('img');
     if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
         return imgInside.getAttribute('alt').trim();
     }
 
+    // 3. Если и этого нет, берем innerText из .katex-html и делаем базовые замены
     const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
     if (katexHtmlNode) {
-        let rawText = katexHtmlNode.innerText.trim().replace(/\s+/g, " "); // Нормализуем пробелы
-
-        // Заменяем математические символы KaTeX на стандартные
+        let rawText = katexHtmlNode.innerText.trim();
         rawText = rawText.replace(/⋅/g, '*') 
                          .replace(/−/g, '-')
-                         .replace(/–/g, '-'); // Добавил еще один вариант минуса (длинное тире)
-
-        // Попытка преобразовать простые дроби вида "знаменатель числитель", если есть .mfrac
+                         .replace(/–/g, '-')
+                         .replace(/\s+/g, " ");
+        
+        // Пробуем перевернуть простые дроби "знаменатель числитель"
+        // Это менее надежно, чем LaTeX, но лучше, чем ничего
         const mfracNode = katexHtmlNode.querySelector('.mfrac');
         if (mfracNode) {
-            const parts = rawText.match(/^\s*(\d+)\s+(\d+)\s*$/); // Ищем ровно два числа, разделенные пробелом
-            if (parts && parts.length === 3) {
-                // Если это "число1 число2" и есть .mfrac, считаем это "знаменатель числитель"
-                return `${parts[2]}/${parts[1]}`; // Возвращаем "числитель/знаменатель"
-            }
-            // Если не просто два числа, или нет .mfrac, то возвращаем rawText как есть (для сложных выражений)
-            // Это означает, что для "32 27 * 162 8 * 72 69" мы не будем пытаться здесь найти дроби,
-            // а передадим как есть, полагаясь на инструкцию в промпте для Gemini.
-            // НО! Если этот декоратор представляет ТОЛЬКО ОДНУ ДРОБЬ, эта логика ее пропустит.
-            // Поэтому нужна более тонкая проверка для отдельных дробей.
-
-            // Улучшенная проверка для отдельных дробей:
-            // Если весь innerText mfracNode - это два числа
             const mfracText = mfracNode.innerText.trim().replace(/\s+/g, " ");
             const mfracParts = mfracText.match(/^\s*(\d+)\s+(\d+)\s*$/);
             if (mfracParts && mfracParts.length === 3) {
-                 return `${mfracParts[2]}/${mfracParts[1]}`;
+                 return `(${mfracParts[2]}/${mfracParts[1]})`; // Оборачиваем в скобки
             }
-            // Если не удалось как простую дробь, возвращаем "сырой" текст всего katexHtmlNode
-             console.warn(`   getFormulaText: Не удалось точно распарсить .mfrac как простую дробь, возвращаем innerText: "${rawText}"`, decoratorNode);
-            return rawText;
         }
-        
-        // Если нет .mfrac, просто возвращаем очищенный текст
-        return rawText;
+        return rawText; // Возвращаем "сырой" текст из KaTeX, если это не простая дробь
     }
     
     if (decoratorNode.innerText && decoratorNode.innerText.trim()) {

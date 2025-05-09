@@ -32,60 +32,64 @@
     function getFormulaTextFromDecorator(decoratorNode) {
     if (!decoratorNode) return "";
 
+    // 1. Попытка получить исходный LaTeX (если вдруг появится)
     let latexSource = decoratorNode.getAttribute('data-latex') || 
                       decoratorNode.getAttribute('data-katex-source') ||
                       decoratorNode.getAttribute('data-equation');
-    if (latexSource) return latexSource; 
+    if (latexSource) return latexSource.trim(); 
 
-    const katexHtmlNode = decoratorNode.querySelector('.katex-html');
-    if (katexHtmlNode) {
-        const mfracNode = katexHtmlNode.querySelector('.mfrac');
-        if (mfracNode) {
-            // Находим все элементы, которые могут содержать части числа (числитель/знаменатель)
-            // Это span'ы с классом 'mord' и 'mtight', которые являются непосредственными контейнерами цифр
-            const numberParts = mfracNode.querySelectorAll('span.mord.mtight > span.mord.mtight'); 
-                                        // Или просто 'span.mord.mtight' если вложенность только один уровень
-                                        // Возможно, даже лучше '.mfrac span.mord.mtight' и брать первые два найденных
-            
-            let partsText = [];
-            numberParts.forEach(part => {
-                const text = part.innerText.trim();
-                if (text && !isNaN(text)) { // Убедимся, что это число
-                    partsText.push(text);
-                }
-            });
-
-            if (partsText.length >= 2) { // Если нашли хотя бы два числовых компонента
-                // Предполагаем, что первый - числитель, второй - знаменатель
-                return `${partsText[0]}/${partsText[1]}`;
-            } else if (partsText.length === 1) {
-                 // Если только одна часть, возможно, это не дробь или ошибка парсинга
-                 console.warn("В .mfrac найдена только одна числовая часть:", partsText[0], mfracNode);
-                 return partsText[0]; // Вернем то, что нашли
-            }
-            // Если не удалось распарсить как дробь, пробуем старый метод с innerText всего KaTeX блока
-            console.warn("Не удалось извлечь числитель/знаменатель из .mfrac, используется innerText:", mfracNode);
-        }
-
-        // Если не нашли .mfrac или парсинг .mfrac не дал результата, пробуем взять innerText всего katex-html
-        let text = katexHtmlNode.innerText.trim().replace(/\s+/g, ' ');
-        const textParts = text.split(' ');
-        if (textParts.length === 2 && !isNaN(textParts[0]) && !isNaN(textParts[1])) {
-             // Это старое предположение "знаменатель числитель"
-             // Если оно неверно для этого сайта, эту часть нужно будет изменить или убрать
-            console.log(`Использован fallback для KaTeX innerText: "${text}" -> "${textParts[1]}/${textParts[0]}"`);
-            return `${textParts[1]}/${textParts[0]}`;
-        }
-        // Для других математических выражений
-        return text; 
-    }
-
+    // 2. Попытка получить alt из img (если вдруг появится)
     const imgInside = decoratorNode.querySelector('img');
     if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
         return imgInside.getAttribute('alt').trim();
     }
+
+    // 3. Основная логика: обходим .katex-html и собираем текст
+    const katexHtmlNode = decoratorNode.querySelector('.katex-html');
+    if (katexHtmlNode) {
+        let fullText = "";
+        // Итерируем по всем непосредственным дочерним узлам .katex-html
+        // или по всем значащим текстовым узлам внутри него.
+        // KaTeX часто оборачивает цифры и символы в <span class="mord"> или <span class="mtable"> и т.д.
+        // или непосредственно в текстовые узлы.
+        
+        // Простой подход: взять innerText всего .katex-html и попытаться его "очистить"
+        // и преобразовать дроби вида "b a"
+        let rawText = katexHtmlNode.innerText.trim();
+        
+        // Убираем лишние пробелы, но сохраняем пробелы между числами и символами
+        rawText = rawText.replace(/\s+/g, " ").trim();
+
+        // Попытка преобразовать части вида "число1 число2" (если они окружены пробелами или являются началом/концом строки)
+        // в "число2/число1", если есть подозрение на дробь (например, родительский .mfrac)
+        // Эта логика может быть сложной и хрупкой, если форматирование KaTeX сильно варьируется.
+
+        // Более простой вариант для начала: просто вернуть "очищенный" innerText.
+        // Gemini часто может понять "32 27" как 27/32 в математическом контексте, особенно если рядом есть другие дроби.
+        // Если нет, то нам придется передавать HTML или пытаться восстановить LaTeX.
+
+        // Проверим, содержит ли весь katexHtmlNode ОДНУ простую дробь (два числа)
+        const simpleFractionMatch = rawText.match(/^(\d+)\s+(\d+)$/);
+        if (simpleFractionMatch && katexHtmlNode.querySelector('.mfrac')) {
+            // Если это два числа и есть .mfrac, предполагаем "знаменатель числитель"
+            return `${simpleFractionMatch[2]}/${simpleFractionMatch[1]}`;
+        }
+        
+        // В остальных случаях (сложные выражения, одиночные числа, символы) - возвращаем "очищенный" текст
+        // Заменяем специфичные символы KaTeX на более стандартные, если нужно
+        rawText = rawText.replace(/⋅/g, '*') // Точка умножения KaTeX
+                         .replace(/−/g, '-') // Минус KaTeX
+                         // Можно добавить другие замены
+                         ;
+        return rawText;
+    }
     
-    return ""; 
+    // 4. Если ничего не найдено, но есть сам декоратор, вернем его innerText
+    if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
+        return decoratorNode.innerText.trim().replace(/\s+/g, " ");
+    }
+    
+    return "[формула]"; // Заглушка, если ничего не удалось извлечь
 }
 
     async function askGemini(fullPrompt) {

@@ -30,28 +30,65 @@
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
     function getFormulaTextFromDecorator(decoratorNode) {
-        if (!decoratorNode) return "";
-        let latexSource = decoratorNode.getAttribute('data-latex') || 
-                          decoratorNode.getAttribute('data-katex-source') ||
-                          decoratorNode.getAttribute('data-equation');
-        if (latexSource) return latexSource; 
-        const katexHtmlNode = decoratorNode.querySelector('.katex-html'); // KaTeX обычно имеет такой класс
-        if (katexHtmlNode) {
-            let text = katexHtmlNode.innerText.trim().replace(/\s+/g, ' ');
-            const parts = text.split(' ');
-            if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-                 if (katexHtmlNode.querySelector('.mfrac')) { // mfrac - класс KaTeX для дробей
-                    return `${parts[1]}/${parts[0]}`; // Предполагаем "знаменатель числитель" -> "числитель/знаменатель"
-                 }
+    if (!decoratorNode) return "";
+
+    let latexSource = decoratorNode.getAttribute('data-latex') || 
+                      decoratorNode.getAttribute('data-katex-source') ||
+                      decoratorNode.getAttribute('data-equation');
+    if (latexSource) return latexSource; 
+
+    const katexHtmlNode = decoratorNode.querySelector('.katex-html');
+    if (katexHtmlNode) {
+        // Сначала проверяем, есть ли явный элемент дроби KaTeX (.mfrac)
+        const mfracNode = katexHtmlNode.querySelector('.mfrac');
+        if (mfracNode) {
+            // Пытаемся найти числитель и знаменатель по их типичной структуре в KaTeX
+            // Это очень упрощенно и может потребовать адаптации под конкретную структуру KaTeX на сайте
+            // KaTeX для \frac{a}{b} часто генерирует что-то вроде:
+            // <span class="mfrac">
+            //   <span><span>a</span></span> (числитель, может быть в нескольких вложенных span)
+            //   <span><span>b</span></span> (знаменатель)
+            // </span>
+            // ИЛИ
+            // <span class="mfrac">
+            //   <span class="vlist-t"><span class="vlist-r"><span class="vlist">...a...</span></span></span> (числитель)
+            //   <span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist">...b...</span></span></span> (знаменатель)
+            // </span>
+            // На вашем скриншоте видна структура с .vlist-t, .vlist-r, .pstrut
+            
+            const numeratorNodes = mfracNode.querySelectorAll('.vlist-t:first-child .pstrut ~ span, .mfrac > span:first-child span:not([class])'); // Очень примерные селекторы!
+            const denominatorNodes = mfracNode.querySelectorAll('.vlist-t.vlist-t2 .pstrut ~ span, .mfrac > span:last-child span:not([class])');
+
+            let numeratorText = "";
+            numeratorNodes.forEach(n => numeratorText += n.innerText.trim());
+            
+            let denominatorText = "";
+            denominatorNodes.forEach(d => denominatorText += d.innerText.trim());
+
+            if (numeratorText && denominatorText && !isNaN(numeratorText) && !isNaN(denominatorText)) {
+                return `${numeratorText}/${denominatorText}`;
             }
-            return text; // Возвращаем как есть, если не дробь или другой формат
+            // Если не удалось распарсить числитель/знаменатель, пробуем старый метод
         }
-        const imgInside = decoratorNode.querySelector('img');
-        if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
-            return imgInside.getAttribute('alt').trim();
+
+        // Если не нашли .mfrac или не смогли распарсить, пробуем старый метод по пробелу
+        let text = katexHtmlNode.innerText.trim().replace(/\s+/g, ' ');
+        const parts = text.split(' ');
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+            // Это предположение, что KaTeX для a/b выводит "b a"
+            return `${parts[1]}/${parts[0]}`;
         }
-        return ""; 
+        // Для других математических выражений (не дробей, или если парсинг дроби не удался)
+        return text; 
     }
+
+    const imgInside = decoratorNode.querySelector('img');
+    if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
+        return imgInside.getAttribute('alt').trim();
+    }
+    
+    return "";
+}
 
     async function askGemini(fullPrompt) {
         const promptLength = fullPrompt.length;

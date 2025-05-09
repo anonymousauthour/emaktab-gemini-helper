@@ -14,95 +14,73 @@
     const LEXICAL_EDITOR_SELECTOR = 'div[data-lexical-editor="true"]';
     const PARAGRAPH_SELECTOR = 'p';
     const TEXT_SPAN_SELECTOR = 'span[data-lexical-text="true"]:not(:empty)';
-    const LEXICAL_DECORATOR_SELECTOR = 'span[data-lexical-decorator="true"]'; // Обычно это span.editor-equation
+    const LEXICAL_DECORATOR_SELECTOR = 'span[data-lexical-decorator="true"]';
     
     const TABLE_SELECTOR_IN_BLOCK = 'table';
     const ANSWER_INPUT_SELECTOR = 'input[data-test-id^="answer-"]';
     const DECORATOR_SPAN_WITH_INPUT_SELECTOR_QUERY = `span[data-lexical-decorator="true"]:has(${ANSWER_INPUT_SELECTOR})`;
-    // const DECORATOR_SPAN_SELECTOR = 'span[data-lexical-decorator="true"]'; // Общий декоратор (используется в extractMainQuestionText для отсечения)
-
+    
     const MC_OPTION_SELECTOR = 'div[data-test-id^="answer-"]'; 
-    // MC_OPTION_TEXT_SELECTOR больше не нужен как отдельная константа, так как логика сложнее
     const MC_SELECTED_CLASS = 'GmaSD';
 
-    let currentBlockMcOptionElements = null;
+    let currentBlockMcOptionElements = null; 
 
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
-function getFormulaTextFromDecorator(decoratorNode) {
-    if (!decoratorNode) return "";
-
-    let latexSource = decoratorNode.getAttribute('data-latex') || 
-                      decoratorNode.getAttribute('data-katex-source') ||
-                      decoratorNode.getAttribute('data-equation');
-    if (latexSource) return latexSource.trim(); 
-
-    const imgInside = decoratorNode.querySelector('img');
-    if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
-        return imgInside.getAttribute('alt').trim();
-    }
-
-    const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
-    if (katexHtmlNode) {
-        const mfracNode = katexHtmlNode.querySelector('.mfrac');
-        if (mfracNode) {
-            const vlistTNodes = Array.from(mfracNode.children).filter(el => el.matches && el.matches('span.vlist-t'));
-            
-            if (vlistTNodes.length >= 2) { // Ожидаем как минимум 2 блока .vlist-t (для числителя и знаменателя)
-                                          // Третий может быть линией, если он не первый и не последний.
-                let numeratorNode = null;
-                let denominatorNode = null;
-
-                // Числитель обычно в первом .vlist-t
-                numeratorNode = vlistTNodes[0].querySelector('span.mord.mtight > span.mord.mtight'); 
-                if (!numeratorNode) numeratorNode = vlistTNodes[0].querySelector('span.mord.mtight'); // Запасной вариант
-
-                // Знаменатель обычно в последнем .vlist-t (или предпоследнем, если линия дроби последняя)
-                // Более надежно - последний .vlist-t, который содержит нужную структуру
-                for (let i = vlistTNodes.length - 1; i >= 0; i--) {
-                    const potentialDenom = vlistTNodes[i].querySelector('span.mord.mtight > span.mord.mtight') || vlistTNodes[i].querySelector('span.mord.mtight');
-                    if (potentialDenom) {
-                        denominatorNode = potentialDenom;
-                        // Убедимся, что это не тот же узел, что и числитель (если всего один .vlist-t с числом)
-                        if (numeratorNode && denominatorNode === numeratorNode && vlistTNodes.length < 2){
-                             denominatorNode = null; // Это не дробь, а просто число
-                        }
-                        break;
-                    }
-                }
-                // Если первый и последний .vlist-t дали одно и то же (т.е. не дробь, а просто выражение), то это не дробь.
-                if (numeratorNode && denominatorNode && numeratorNode.isSameNode(denominatorNode) && vlistTNodes.length <=2 ) {
-                     // Это может быть не дробь, а просто число. Вернем его.
-                     const singleNumber = numeratorNode.innerText.trim();
-                     if (singleNumber && !isNaN(singleNumber)) return singleNumber;
-                }
-
-
-                if (numeratorNode && denominatorNode) {
-                    const numText = numeratorNode.innerText.trim();
-                    const denText = denominatorNode.innerText.trim();
-                    if (numText && denText && !isNaN(numText) && !isNaN(denText)) {
-                        return `${numText}/${denText}`;
-                    }
-                }
-                console.warn("Не удалось точно извлечь числитель/знаменатель из .mfrac для:", decoratorNode.innerHTML.substring(0,150));
-            }
+    function getFormulaTextFromDecorator(decoratorNode) {
+        if (!decoratorNode) return "";
+        let latexSource = decoratorNode.getAttribute('data-latex') || 
+                          decoratorNode.getAttribute('data-katex-source') ||
+                          decoratorNode.getAttribute('data-equation');
+        if (latexSource) return latexSource.trim(); 
+        const imgInside = decoratorNode.querySelector('img');
+        if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
+            return imgInside.getAttribute('alt').trim();
         }
+        const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
+        if (katexHtmlNode) {
+            const mfracNode = katexHtmlNode.querySelector('.mfrac');
+            if (mfracNode) {
+                const vlistTNodes = Array.from(mfracNode.children).filter(el => el.matches && el.matches('span.vlist-t'));
+                if (vlistTNodes.length >= 2) {
+                    let numeratorNode = null;
+                    let denominatorNode = null;
+                    const firstVlistTChildren = vlistTNodes[0].querySelectorAll('span.mord.mtight > span.mord.mtight, span.mord.mtight');
+                    if (firstVlistTChildren.length > 0) numeratorNode = firstVlistTChildren[firstVlistTChildren.length -1];
 
-        // Если не .mfrac или парсинг не удался, используем innerText всего .katex-html и заменяем символы
-        let rawText = katexHtmlNode.innerText.trim();
-        rawText = rawText.replace(/⋅/g, '*') 
-                         .replace(/−/g, '-')
-                         .replace(/\s+/g, " "); 
-        return rawText;
+
+                    for (let i = vlistTNodes.length - 1; i > 0; i--) { // Ищем знаменатель, начиная с конца, но не в первом vlist-t
+                        if (vlistTNodes[i] === vlistTNodes[0]) continue; // Пропускаем, если это тот же узел, что и для числителя
+                        const potentialDenomChildren = vlistTNodes[i].querySelectorAll('span.mord.mtight > span.mord.mtight, span.mord.mtight');
+                        if (potentialDenomChildren.length > 0) {
+                            denominatorNode = potentialDenomChildren[potentialDenomChildren.length -1];
+                            if (numeratorNode && denominatorNode.isSameNode(numeratorNode) && vlistTNodes.filter(n => n.querySelector('span.mord.mtight')).length < 2) {
+                                 denominatorNode = null; // Это не дробь, если числитель и знаменатель - один и тот же узел из единственного блока
+                            } else {
+                                break; // Нашли знаменатель
+                            }
+                        }
+                    }
+                    
+                    if (numeratorNode && denominatorNode) {
+                        const numText = numeratorNode.innerText.trim();
+                        const denText = denominatorNode.innerText.trim();
+                        if (numText && denText && !isNaN(numText) && !isNaN(denText)) {
+                            return `${numText}/${denText}`;
+                        }
+                    }
+                    console.warn("Не удалось точно извлечь числитель/знаменатель из .mfrac для:", decoratorNode.innerHTML.substring(0,150));
+                }
+            }
+            let rawText = katexHtmlNode.innerText.trim();
+            rawText = rawText.replace(/⋅/g, '*') .replace(/−/g, '-').replace(/\s+/g, " "); 
+            return rawText;
+        }
+        if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
+            return decoratorNode.innerText.trim().replace(/\s+/g, " ");
+        }
+        return "[формула]";
     }
-    
-    if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
-        return decoratorNode.innerText.trim().replace(/\s+/g, " ");
-    }
-    
-    return "[формула]";
-}
 
     async function askGemini(fullPrompt) {
         const promptLength = fullPrompt.length;
@@ -110,7 +88,6 @@ function getFormulaTextFromDecorator(decoratorNode) {
         if (promptLength < 2000) console.log("Полный промпт:", fullPrompt);
         else console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
         if (promptLength > 25000) console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая!`);
-
         try {
             const response = await fetch(GEMINI_API_URL, {
                 method: 'POST',
@@ -158,9 +135,7 @@ function getFormulaTextFromDecorator(decoratorNode) {
         const lexicalEditor = questionBlockElement.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (lexicalEditor) lexicalEditor.insertAdjacentElement('afterend', answerDisplay);
         else questionBlockElement.appendChild(answerDisplay);
-
         if (geminiAnswer.startsWith("ОШИБКА API") || geminiAnswer.startsWith("ЗАПРОС ЗАБЛОКИРОВАН")) return;
-
         if (answerData.type === 'inputs' && answerData.inputs && answerData.inputs.length > 0) {
             const lines = geminiAnswer.split('\n');
             lines.forEach(line => {
@@ -186,7 +161,6 @@ function getFormulaTextFromDecorator(decoratorNode) {
                          }
                     }
                     if (inputElement) {
-                        console.log(`Попытка вставить "${valueToInsert}" в input (ключ: "${key}", data-test-id: ${inputElement.getAttribute('data-test-id')})`);
                         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                         nativeInputValueSetter.call(inputElement, valueToInsert);
                         inputElement.dispatchEvent(new Event('focus', { bubbles: true }));
@@ -218,14 +192,13 @@ function getFormulaTextFromDecorator(decoratorNode) {
                 }
             }
             if (selectedOptionElement) {
-                console.log(`Попытка выбрать вариант: "${selectedOptionElement.innerText.trim()}"`);
                 selectedOptionElement.click();
                 selectedOptionElement.style.outline = '2px solid green';
                 setTimeout(() => {
                     if (selectedOptionElement.classList.contains(MC_SELECTED_CLASS)) {
                         console.log(`Класс ${MC_SELECTED_CLASS} успешно применен после клика.`);
                     } else {
-                        console.warn(`Класс ${MC_SELECTED_CLASS} НЕ применен после клика. Проверьте механизм выбора на сайте.`);
+                        console.warn(`Класс ${MC_SELECTED_CLASS} НЕ применен после клика.`);
                     }
                 }, 200);
             } else {
@@ -239,7 +212,6 @@ function getFormulaTextFromDecorator(decoratorNode) {
         if (!lexicalEditor) return "";
         let mainQuestionSegments = [];
         const allChildNodesOfEditor = Array.from(lexicalEditor.childNodes);
-
         for (const childNode of allChildNodesOfEditor) {
             if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(PARAGRAPH_SELECTOR)) {
                 const p = childNode;
@@ -247,14 +219,11 @@ function getFormulaTextFromDecorator(decoratorNode) {
                 if (currentBlockMcOptionElements && currentBlockMcOptionElements.length > 0) {
                     for (const mcOptEl of currentBlockMcOptionElements) {
                         if (mcOptEl.contains(p) || p.contains(mcOptEl) || mcOptEl === p) {
-                             // Если p является частью MC опции, то его текст не является основным вопросом
-                            isPartOfOption = true;
-                            break;
+                            isPartOfOption = true; break;
                         }
                     }
                 }
                 if (isPartOfOption) continue;
-
                 let pTextContent = "";
                 Array.from(p.childNodes).forEach(node => {
                     if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
@@ -275,11 +244,8 @@ function getFormulaTextFromDecorator(decoratorNode) {
                         }
                     }
                 });
-                if (pTextContent.trim()) {
-                    mainQuestionSegments.push(pTextContent.trim());
-                }
+                if (pTextContent.trim()) mainQuestionSegments.push(pTextContent.trim());
             } else if (childNode.nodeType === Node.ELEMENT_NODE && childNode.matches(LEXICAL_DECORATOR_SELECTOR)) {
-                // Обработка декораторов, которые могут быть прямыми потомками lexicalEditor
                 mainQuestionSegments.push(getFormulaTextFromDecorator(childNode));
             }
         }
@@ -287,8 +253,9 @@ function getFormulaTextFromDecorator(decoratorNode) {
     }
     
     function buildPrompt(mainQuestionText, typeData) {
-    let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не пиши объяснений или промежуточных шагов.\n`;
-    prompt += `Если в вопросе или вариантах ответа встречается конструкция "число1 число2" (два числа через пробел), интерпретируй это как дробь "число2/число1" (второе число делить на первое).\n`; // <-- НОВАЯ ИНСТРУКЦИЯ
+        let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не пиши объяснений или промежуточных шагов.\n`;
+        prompt += `Если в вопросе или вариантах ответа встречается конструкция "число1 число2" (два числа через пробел), ИНТЕРПРЕТИРУЙ это как дробь "число2/число1" (второе число делить на первое).\n`;
+
         if (typeData.type === 'table') {
             prompt += `Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).\nФормат ответа: "Имя_колонки для Имя_первого_столбца=значение: твой_ответ" или "answer-X: твой_ответ".\n\n`;
             prompt += `ЗАДАНИЕ (таблица):\nОсновной вопрос:\n${mainQuestionText}\nТаблица для заполнения (предоставь значения для ячеек с [INPUT ...]):\n`;
@@ -482,7 +449,7 @@ function getFormulaTextFromDecorator(decoratorNode) {
                 promptDataPayload = { type: 'multipleChoice', data: mcOptionsData };
             } else if (tableData && tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'))) {
                 promptDataPayload = { type: 'table', data: tableData };
-            } else if (nonTableInputsData.length > 0 || allInputsForDisplay.inputs.length > 0) { // Учитываем и те инпуты, что могли быть только в allInputsForDisplay
+            } else if (nonTableInputsData.length > 0 || allInputsForDisplay.inputs.length > 0) {
                 promptDataPayload = { type: 'inputs', data: nonTableInputsData.length > 0 ? nonTableInputsData : allInputsForDisplay.inputs };
             } else {
                  console.warn(`   Не удалось определить тип данных для промпта блока ${blockId}. Пропускаем.`);

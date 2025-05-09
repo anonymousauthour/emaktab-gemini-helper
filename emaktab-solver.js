@@ -133,49 +133,61 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
-        // ... (код buildPrompt без изменений)
-        let prompt = `Проанализируй следующий вопрос и предоставь ответы.
-Если это таблица, заполни ячейки, помеченные как [МЕСТО ДЛЯ ОТВЕТА] или [INPUT ...].
-Если это список вопросов, дай ответ для каждого пункта.
-Ответы давай в формате "answer-X: значение" или "метка_вопроса: значение", где X - номер из data-test-id.
+    let prompt = `Ты — ИИ-ассистент для решения математических и логических задач.
+Внимательно проанализируй следующий вопрос. 
+Для каждого запрашиваемого ответа (помеченного как [INPUT answer-X] или в таблице) предоставь ТОЛЬКО КОНЕЧНЫЙ РЕЗУЛЬТАТ.
+Избегай промежуточных вычислений или объяснений в ответе, если это явно не указано в вопросе.
+Если ответ — число, дай только число. Если дробь — дай дробь (например, 3/40).
+
+Ответы должны быть в формате "answer-X: значение_ответа" или "метка_вопроса: значение_ответа".
 Например:
-answer-1: 15
-answer-2: 3/40
+answer-1: 28672
+answer-2: 5880
+Колонка W для x=5: 1/20 
 Среднее значение: 25
 
 Основной вопрос:
 ${mainQuestionText}
 \n`;
-        if (tableData && tableData.rows && tableData.rows.length > 0) {
-            prompt += "\nТаблица для заполнения:\n";
-            if (tableData.headers && tableData.headers.length > 0) {
-                prompt += tableData.headers.join('\t|\t') + '\n';
-                prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
-            }
-            tableData.rows.forEach((row, rowIndex) => {
-                let rowStr = "";
-                (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
-                    const cellContent = row[header]; 
-                    if (cellContent) { 
-                        if (cellContent.type === 'input') {
-                            rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
-                        } else {
-                            rowStr += (cellContent.value !== undefined ? cellContent.value : '(пусто)') + '\t|\t';
-                        }
-                    } else {
-                        rowStr += '(нет данных по заголовку)' + '\t|\t'; 
-                    }
-                });
-                prompt += rowStr.slice(0, -3) + '\n'; 
-            });
-        } else if (nonTableInputsData.length > 0) {
-            prompt += "\nОтветь на следующие пункты:\n";
-            nonTableInputsData.forEach(inputData => {
-                prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
-            });
+
+    if (tableData && tableData.rows && tableData.rows.length > 0) {
+        prompt += "\nТаблица для заполнения:\n";
+        if (tableData.headers && tableData.headers.length > 0) {
+            prompt += tableData.headers.join('\t|\t') + '\n';
+            prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
         }
-        return prompt;
+        tableData.rows.forEach((row, rowIndex) => {
+            let rowStr = "";
+            (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
+                const cellContent = row[header]; 
+                if (cellContent) { 
+                    if (cellContent.type === 'input') {
+                        // Для таблиц просим ответ в формате "Имя_колонки для Имя_первого_столбца=значение: ответ"
+                        // Это поможет Gemini лучше понять, к какой ячейке относится ответ.
+                        // Найдем значение первого столбца для текущей строки
+                        const firstColHeader = tableData.headers.length ? tableData.headers[0] : Object.keys(row)[0];
+                        const firstColValue = row[firstColHeader] && row[firstColHeader].type === 'data' ? row[firstColHeader].value : `строка ${rowIndex +1}`;
+                        rowStr += `[${header} для ${firstColHeader}=${firstColValue} (INPUT ${cellContent.dataTestId || 'NO_ID'})]` + '\t|\t';
+                    } else {
+                        rowStr += (cellContent.value !== undefined ? cellContent.value : '(пусто)') + '\t|\t';
+                    }
+                } else {
+                    rowStr += '(нет данных по заголовку)' + '\t|\t'; 
+                }
+            });
+            prompt += rowStr.slice(0, -3) + '\n'; 
+        });
+        prompt += "\nПожалуйста, предоставь значения для всех ячеек, помеченных как [INPUT ...], используя формат 'Имя_колонки для Имя_первого_столбца=значение: твой_ответ' или 'answer-X: твой_ответ'.\n";
+
+    } else if (nonTableInputsData.length > 0) {
+        prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого INPUT):\n";
+        nonTableInputsData.forEach(inputData => {
+            prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
+        });
+        prompt += "\nПожалуйста, предоставь значения для всех [INPUT ...], используя формат 'answer-X: твой_ответ' или 'метка_пункта: твой_ответ'.\n";
     }
+    return prompt;
+}
 
     async function processQuestionsOnPage() {
         // ... (код processQuestionsOnPage без изменений)

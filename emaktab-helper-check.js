@@ -29,57 +29,139 @@
 
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
-    function getFormulaTextFromDecorator(decoratorNode) {
+    // --- Новая, более "умная" функция для извлечения текста из KaTeX ---
+function parseKatexNodeRecursive(node) {
+    let text = "";
+    if (!node) return "";
+
+    // 1. Обработка дробей (.mfrac)
+    if (node.matches && node.matches('.mfrac')) {
+        // KaTeX для \frac{a}{b} обычно имеет два основных дочерних элемента (или группы элементов)
+        // для числителя и знаменателя. Структура может быть сложной.
+        // Простой подход: найти два "основных" текстовых блока внутри.
+        // Это ОЧЕНЬ СИЛЬНОЕ УПРОЩЕНИЕ и может потребовать адаптации под конкретный HTML eMaktab!
+        
+        // Ищем контейнеры для числителя и знаменателя.
+        // KaTeX часто использует .vlist-t для вертикального позиционирования.
+        // Числитель обычно в первом .vlist-t (или его потомках), знаменатель - в одном из последующих.
+        const childSpans = Array.from(node.children).filter(el => el.matches('span')); // Берем только span-потомки mfrac
+        let numeratorText = "";
+        let denominatorText = "";
+
+        if (childSpans.length >= 2) {
+            // Пытаемся извлечь текст из предполагаемых областей числителя и знаменателя
+            // Первая группа элементов (до линии дроби, если она есть) - числитель
+            // Вторая группа (после линии дроби) - знаменатель
+            // Это очень эвристично!
+            const fracLine = node.querySelector('.frac-line');
+            let foundFracLine = false;
+            let tempNumerator = "";
+            let tempDenominator = "";
+
+            for (const child of Array.from(node.childNodes)) { // Обходим всех детей mfrac
+                if (fracLine && child === fracLine) {
+                    foundFracLine = true;
+                    continue;
+                }
+                if (!foundFracLine) {
+                    tempNumerator += parseKatexNodeRecursive(child);
+                } else {
+                    tempDenominator += parseKatexNodeRecursive(child);
+                }
+            }
+            
+            if (tempNumerator.trim() && tempDenominator.trim()) {
+                numeratorText = tempNumerator.trim();
+                denominatorText = tempDenominator.trim();
+            } else { // Если frac-line не помогла, пробуем просто по порядку вложенных span (менее надежно)
+                let potentialParts = [];
+                Array.from(node.querySelectorAll('span.mord')).forEach(mord => {
+                    if (mord.innerText.trim()) potentialParts.push(mord.innerText.trim());
+                });
+                if (potentialParts.length >= 2) {
+                    numeratorText = potentialParts[0];
+                    denominatorText = potentialParts[1];
+                }
+            }
+
+
+            if (numeratorText && denominatorText) {
+                return `(${numeratorText}/${denominatorText})`; // Оборачиваем в скобки для ясности
+            }
+        }
+        // Если не удалось распарсить как дробь, возвращаем внутренний текст всего mfrac
+        return node.innerText.trim().replace(/\s+/g, ' ');
+    }
+
+    // 2. Обработка символов и текста
+    if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent.trim();
+    }
+
+    if (node.nodeType === Node.ELEMENT_NODE) {
+        // Простые текстовые элементы KaTeX (цифры, переменные) часто в .mord
+        if (node.matches && (node.matches('.mord') || node.matches('.mn') || node.matches('.mi'))) {
+            return node.innerText.trim();
+        }
+        // Символы операций
+        if (node.matches && node.matches('.mspace')) { // Пробелы KaTeX
+             if (node.style.marginRight && parseFloat(node.style.marginRight) > 0.2) return " "; // Значимый пробел
+             return ""; // Маленькие пробелы игнорируем
+        }
+        if (node.matches && node.matches('.mbin, .mrel')) { // Бинарные операторы (+, -, =, <, >) и отношения
+            let op = node.innerText.trim();
+            if (op === '⋅') return ' * ';
+            if (op === '−') return ' - ';
+            if (op === '–') return ' - '; // Тире тоже может быть минусом
+            if (op === '=') return ' = ';
+            if (op === '<') return ' < ';
+            if (op === '>') return ' > ';
+            if (op === '≤') return ' <= ';
+            if (op === '≥') return ' >= ';
+            if (op === '±') return ' ± ';
+            if (op === '≠') return ' != ';
+            // Добавьте другие символы по мере необходимости
+            return ` ${op} `; // Обрамляем пробелами
+        }
+        // Корни, степени и т.д. - пока просто берем их innerText
+        // Это потребует более сложного парсинга, если нужно точное представление
+        if (node.matches && (node.matches('.sqrt') || node.matches('.vlist .pstrut ~ span sup'))) { // Корень или степень
+            return node.innerText.trim().replace(/\s+/g, ''); // Убираем пробелы внутри корня/степени
+        }
+
+        // Если это контейнер без специфической роли, обходим его детей
+        let childText = "";
+        if (node.childNodes && node.childNodes.length > 0) {
+            node.childNodes.forEach(child => {
+                childText += parseKatexNodeRecursive(child);
+            });
+        } else if (node.innerText) { // Запасной вариант, если нет детей, но есть текст
+            childText = node.innerText.trim();
+        }
+        return childText;
+    }
+    return "";
+}
+
+function getFormulaTextFromDecorator(decoratorNode) {
     if (!decoratorNode) return "";
 
-    // 1. Попытка получить исходный LaTeX (если вдруг появится)
     let latexSource = decoratorNode.getAttribute('data-latex') || 
                       decoratorNode.getAttribute('data-katex-source') ||
                       decoratorNode.getAttribute('data-equation');
     if (latexSource) return latexSource.trim(); 
 
-    // 2. Попытка получить alt из img (если вдруг появится)
     const imgInside = decoratorNode.querySelector('img');
     if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
         return imgInside.getAttribute('alt').trim();
     }
 
-    // 3. Основная логика: работаем с innerText .katex-html
-    const katexHtmlNode = decoratorNode.querySelector('.katex-html');
+    const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
     if (katexHtmlNode) {
-        let rawText = katexHtmlNode.innerText.trim();
-
-        // Сначала заменяем символы KaTeX на стандартные
-        rawText = rawText.replace(/⋅/g, '*') 
-                         .replace(/−/g, '-')
-                         .replace(/\s+/g, " "); // Нормализуем пробелы
-
-        // Теперь ищем все `.mfrac` элементы внутри этого katexHtmlNode
-        // и для каждого из них пытаемся правильно собрать дробь
-        const mfracNodes = Array.from(katexHtmlNode.querySelectorAll('.mfrac'));
-        
-        // Собираем текст, заменяя представления .mfrac на "числитель/знаменатель"
-        // Это сложная часть, так как нужно правильно сопоставить текст из mfrac с текстом в rawText.
-        // Простой подход: если rawText содержит только два числа и есть .mfrac, то это простая дробь.
-        const partsForSimpleFractionCheck = rawText.split(' ');
-        if (partsForSimpleFractionCheck.length === 2 && 
-            !isNaN(partsForSimpleFractionCheck[0]) && 
-            !isNaN(partsForSimpleFractionCheck[1]) &&
-            mfracNodes.length === 1) { // Только одна дробь в этом декораторе
-            return `${partsForSimpleFractionCheck[1]}/${partsForSimpleFractionCheck[0]}`;
-        }
-        
-        // Для более сложных выражений, где .mfrac могут быть вперемешку с другими символами,
-        // простой замены "b a" на "a/b" может быть недостаточно или она может сработать не там.
-        // Gemini должен быть в состоянии понять "27 32 * 8 162 * 69 72", если мы ему скажем,
-        // что "число1 число2" означает "число2/число1".
-        // Либо, нам нужна более сложная постобработка rawText, чтобы найти все "b a" и заменить их.
-
-        // Давайте пока оставим rawText как есть после замены символов.
-        // Промпт будет содержать инструкцию для Gemini, как интерпретировать "число1 число2".
-        return rawText;
+        return parseKatexNodeRecursive(katexHtmlNode).replace(/\s+/g, " ").trim();
     }
     
+    // Если ничего из вышеперечисленного, но есть текст в самом декораторе
     if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
         return decoratorNode.innerText.trim().replace(/\s+/g, " ");
     }

@@ -41,8 +41,8 @@
             body: JSON.stringify({
                 contents: [{ parts: [{ text: fullPrompt }] }],
                 generationConfig: {
-                    temperature: 0.5,     // Немного повысим, чтобы дать больше свободы
-                    maxOutputTokens: 1024, // Увеличим значительно, чтобы точно хватило
+                    temperature: 0.7,     // Немного повысим, чтобы дать больше свободы
+                    maxOutputTokens: 32, // Увеличим значительно, чтобы точно хватило
                     // topK: 40,          // Можно попробовать эти параметры для разнообразия
                     // topP: 0.95,
                 }
@@ -148,57 +148,9 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
-    let prompt = `ВАЖНО: Предоставь ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ на поставленные вопросы или для заполнения ячеек.
-Не пиши объяснений, рассуждений или промежуточных шагов.
-Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).
-
-Формат ответа для каждого поля ввода:
-"answer-X: значение_ответа" (где X - номер из data-test-id)
-ИЛИ "метка_вопроса: значение_ответа" (если метка более понятна).
-
-Примеры формата:
-answer-1: 28672
-answer-2: 5880
-W для x=5: 1/20 
-n для x=6: 4
-
----
-ЗАДАНИЕ:
-Основной вопрос:
-${mainQuestionText}
-\n`;
-
-    if (tableData && tableData.rows && tableData.rows.length > 0) {
-        prompt += "\nТаблица для заполнения (предоставь значения для ячеек с [INPUT ...]):\n";
-        if (tableData.headers && tableData.headers.length > 0) {
-            prompt += tableData.headers.join('\t|\t') + '\n';
-            prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
-        }
-        
-        tableData.rows.forEach((row) => {
-            let rowStr = "";
-            (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
-                const cellContent = row[header]; 
-                if (cellContent) { 
-                    if (cellContent.type === 'input') {
-                        rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
-                    } else {
-                        rowStr += (cellContent.value !== undefined ? cellContent.value : '') + '\t|\t'; // (пусто) можно убрать, чтобы не сбивать Gemini
-                    }
-                } else {
-                    rowStr += '' + '\t|\t'; // Пустая ячейка
-                }
-            });
-            prompt += rowStr.slice(0, -3) + '\n'; 
-        });
-    } else if (nonTableInputsData.length > 0) {
-        prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого [INPUT ...]):\n";
-        nonTableInputsData.forEach(inputData => {
-            prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
-        });
-    }
-    prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ.\n";
-    return prompt;
+    const simplePrompt = "Сколько будет 2 + 2? Дай только числовой ответ.";
+    console.log("Отправка тестового простого промпта:", simplePrompt);
+    return simplePrompt;
 }
 
     async function processQuestionsOnPage() {

@@ -28,60 +28,63 @@
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
     function getFormulaTextFromDecorator(decoratorNode) {
-        if (!decoratorNode) return "";
-        let latexSource = decoratorNode.getAttribute('data-latex') || 
-                          decoratorNode.getAttribute('data-katex-source') ||
-                          decoratorNode.getAttribute('data-equation');
-        if (latexSource) return latexSource.trim(); 
-        const imgInside = decoratorNode.querySelector('img');
-        if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
-            return imgInside.getAttribute('alt').trim();
-        }
-        const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
-        if (katexHtmlNode) {
-            const mfracNode = katexHtmlNode.querySelector('.mfrac');
-            if (mfracNode) {
-                const vlistTNodes = Array.from(mfracNode.children).filter(el => el.matches && el.matches('span.vlist-t'));
-                if (vlistTNodes.length >= 2) {
-                    let numeratorNode = null;
-                    let denominatorNode = null;
-                    const firstVlistTChildren = vlistTNodes[0].querySelectorAll('span.mord.mtight > span.mord.mtight, span.mord.mtight');
-                    if (firstVlistTChildren.length > 0) numeratorNode = firstVlistTChildren[firstVlistTChildren.length -1];
+    if (!decoratorNode) return "";
 
+    let latexSource = decoratorNode.getAttribute('data-latex') || 
+                      decoratorNode.getAttribute('data-katex-source') ||
+                      decoratorNode.getAttribute('data-equation');
+    if (latexSource) return latexSource.trim(); 
 
-                    for (let i = vlistTNodes.length - 1; i > 0; i--) { // Ищем знаменатель, начиная с конца, но не в первом vlist-t
-                        if (vlistTNodes[i] === vlistTNodes[0]) continue; // Пропускаем, если это тот же узел, что и для числителя
-                        const potentialDenomChildren = vlistTNodes[i].querySelectorAll('span.mord.mtight > span.mord.mtight, span.mord.mtight');
-                        if (potentialDenomChildren.length > 0) {
-                            denominatorNode = potentialDenomChildren[potentialDenomChildren.length -1];
-                            if (numeratorNode && denominatorNode.isSameNode(numeratorNode) && vlistTNodes.filter(n => n.querySelector('span.mord.mtight')).length < 2) {
-                                 denominatorNode = null; // Это не дробь, если числитель и знаменатель - один и тот же узел из единственного блока
-                            } else {
-                                break; // Нашли знаменатель
-                            }
-                        }
-                    }
-                    
-                    if (numeratorNode && denominatorNode) {
-                        const numText = numeratorNode.innerText.trim();
-                        const denText = denominatorNode.innerText.trim();
-                        if (numText && denText && !isNaN(numText) && !isNaN(denText)) {
-                            return `${numText}/${denText}`;
-                        }
-                    }
-                    console.warn("Не удалось точно извлечь числитель/знаменатель из .mfrac для:", decoratorNode.innerHTML.substring(0,150));
-                }
-            }
-            let rawText = katexHtmlNode.innerText.trim();
-            rawText = rawText.replace(/⋅/g, '*') .replace(/−/g, '-').replace(/\s+/g, " "); 
-            return rawText;
-        }
-        if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
-            return decoratorNode.innerText.trim().replace(/\s+/g, " ");
-        }
-        return "[формула]";
+    const imgInside = decoratorNode.querySelector('img');
+    if (imgInside && imgInside.getAttribute('alt') && imgInside.getAttribute('alt').trim()) {
+        return imgInside.getAttribute('alt').trim();
     }
 
+    const katexHtmlNode = decoratorNode.querySelector('.katex-html[aria-hidden="true"]');
+    if (katexHtmlNode) {
+        let rawText = katexHtmlNode.innerText.trim().replace(/\s+/g, " "); // Нормализуем пробелы
+
+        // Заменяем математические символы KaTeX на стандартные
+        rawText = rawText.replace(/⋅/g, '*') 
+                         .replace(/−/g, '-')
+                         .replace(/–/g, '-'); // Добавил еще один вариант минуса (длинное тире)
+
+        // Попытка преобразовать простые дроби вида "знаменатель числитель", если есть .mfrac
+        const mfracNode = katexHtmlNode.querySelector('.mfrac');
+        if (mfracNode) {
+            const parts = rawText.match(/^\s*(\d+)\s+(\d+)\s*$/); // Ищем ровно два числа, разделенные пробелом
+            if (parts && parts.length === 3) {
+                // Если это "число1 число2" и есть .mfrac, считаем это "знаменатель числитель"
+                return `${parts[2]}/${parts[1]}`; // Возвращаем "числитель/знаменатель"
+            }
+            // Если не просто два числа, или нет .mfrac, то возвращаем rawText как есть (для сложных выражений)
+            // Это означает, что для "32 27 * 162 8 * 72 69" мы не будем пытаться здесь найти дроби,
+            // а передадим как есть, полагаясь на инструкцию в промпте для Gemini.
+            // НО! Если этот декоратор представляет ТОЛЬКО ОДНУ ДРОБЬ, эта логика ее пропустит.
+            // Поэтому нужна более тонкая проверка для отдельных дробей.
+
+            // Улучшенная проверка для отдельных дробей:
+            // Если весь innerText mfracNode - это два числа
+            const mfracText = mfracNode.innerText.trim().replace(/\s+/g, " ");
+            const mfracParts = mfracText.match(/^\s*(\d+)\s+(\d+)\s*$/);
+            if (mfracParts && mfracParts.length === 3) {
+                 return `${mfracParts[2]}/${mfracParts[1]}`;
+            }
+            // Если не удалось как простую дробь, возвращаем "сырой" текст всего katexHtmlNode
+             console.warn(`   getFormulaText: Не удалось точно распарсить .mfrac как простую дробь, возвращаем innerText: "${rawText}"`, decoratorNode);
+            return rawText;
+        }
+        
+        // Если нет .mfrac, просто возвращаем очищенный текст
+        return rawText;
+    }
+    
+    if (decoratorNode.innerText && decoratorNode.innerText.trim()) {
+        return decoratorNode.innerText.trim().replace(/\s+/g, " ");
+    }
+    
+    return "[формула]";
+}
     async function askGemini(fullPrompt) {
         const promptLength = fullPrompt.length;
         console.log(`Промпт для Gemini (длина: ${promptLength} символов).`);

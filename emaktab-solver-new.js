@@ -23,37 +23,37 @@
     // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 
     async function askGemini(fullPrompt) {
-    const promptLength = fullPrompt.length;
-    console.log(`Промпт для Gemini (длина: ${promptLength} символов). Первые 500 символов:`, fullPrompt.substring(0, 500));
-    
-    if (promptLength > 15000) { // Примерный порог, после которого могут начаться проблемы
-        console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая! Это может привести к таймауту или ошибке.`);
-        // Можно даже вернуть заглушку, чтобы не отправлять слишком большой промпт
-        // return "Промпт слишком длинный для обработки."; 
-    }
+        const promptLength = fullPrompt.length;
+        console.log(`Промпт для Gemini (длина: ${promptLength} символов).`);
+        if (promptLength < 2000) {
+            console.log("Полный промпт:", fullPrompt);
+        } else {
+            console.log("Начало промпта (первые 500 символов):", fullPrompt.substring(0, 500));
+        }
+        
+        if (promptLength > 25000) {
+            console.warn(`ПРЕДУПРЕЖДЕНИЕ: Длина промпта (${promptLength}) очень большая! Это может привести к таймауту или ошибке.`);
+        }
 
-    try {
-        const response = await fetch(GEMINI_API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: fullPrompt }] }],
-                generationConfig: {
-                    temperature: 0.7,     // Немного повысим, чтобы дать больше свободы
-                    maxOutputTokens: 32, // Увеличим значительно, чтобы точно хватило
-                    // topK: 40,          // Можно попробовать эти параметры для разнообразия
-                    // topP: 0.95,
-                }
-            }),
-            // Можно попробовать добавить явный таймаут для fetch, но это сложнее
-            // и не всегда поддерживается в userscript-окружении без GM_xmlhttpRequest
-        });
+        try {
+            const response = await fetch(GEMINI_API_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    contents: [{ parts: [{ text: fullPrompt }] }],
+                    generationConfig: {
+                        temperature: 0.6,
+                        maxOutputTokens: 1500,
+                    }
+                }),
+            });
 
             if (!response.ok) {
                 const errorData = await response.json();
                 console.error('Gemini API Error:', response.status, errorData);
+                if (promptLength < 2000) console.error("Промпт, вызвавший ошибку:", fullPrompt);
                 const detailedError = errorData?.error?.message || JSON.stringify(errorData);
                 return `ОШИБКА API ${response.status}: ${detailedError}`;
             }
@@ -62,9 +62,11 @@
             if (data.candidates && data.candidates.length > 0 &&
                 data.candidates[0].content && data.candidates[0].content.parts &&
                 data.candidates[0].content.parts.length > 0) {
+                console.log("Ответ от Gemini:", data.candidates[0].content.parts[0].text.trim());
                 return data.candidates[0].content.parts[0].text.trim();
             } else if (data.promptFeedback && data.promptFeedback.blockReason) {
                 console.warn('Gemini API: Запрос заблокирован.', data.promptFeedback);
+                if (promptLength < 2000) console.warn("Промпт, вызвавший блокировку:", fullPrompt);
                 return `ЗАПРОС ЗАБЛОКИРОВАН: ${data.promptFeedback.blockReason}`;
             } else {
                 console.warn('Gemini API: Некорректный формат ответа.', data);
@@ -72,6 +74,7 @@
             }
         } catch (error) {
             console.error('Ошибка при запросе к Gemini API:', error);
+            if (promptLength < 2000) console.error("Промпт, при котором произошла сетевая ошибка:", fullPrompt);
             return `Сетевая ошибка Gemini: ${error.message}`;
         }
     }
@@ -101,27 +104,42 @@
         if (answerInputsData.length > 0 && geminiAnswer && !geminiAnswer.startsWith("ОШИБКА API") && !geminiAnswer.startsWith("ЗАПРОС ЗАБЛОКИРОВАН")) {
             const lines = geminiAnswer.split('\n');
             lines.forEach(line => {
-                const match = line.match(/(?:answer-|INPUT\s+)([a-zA-Z0-9_-]+)\s*:\s*(.*)/i);
+                const match = line.match(/(?:answer-|INPUT\s+)?([a-zA-Z0-9_ -]+?)\s*:\s*(.*)/i); // Упрощено для захвата метки
                 if (match) {
-                    const dataTestId = "answer-" + match[1].replace(/^answer-/i, '');
+                    let key = match[1].trim();
                     const valueToInsert = match[2].trim();
-                    const inputElement = questionBlockElement.querySelector(`input[data-test-id="${dataTestId}"]`);
+                    
+                    // Пытаемся найти input по data-test-id, если ключ похож на answer-X
+                    let inputElement;
+                    if (/^answer-\d+$/i.test(key) || /^\d+$/.test(key)) { // Если ключ "answer-X" или просто "X"
+                        const num = key.match(/\d+$/);
+                        if (num) {
+                           inputElement = questionBlockElement.querySelector(`input[data-test-id="answer-${num[0]}"]`);
+                        }
+                    }
+                    
+                    // Если не нашли по data-test-id, или ключ не похож на answer-X,
+                    // пытаемся найти input, чей "контекст" (из answerInputsData) совпадает с ключом
+                    if (!inputElement && answerInputsData.some(inp => inp.context && inp.context.toLowerCase().includes(key.toLowerCase()))) {
+                         const foundInputData = answerInputsData.find(inp => inp.context && inp.context.toLowerCase().includes(key.toLowerCase()));
+                         if (foundInputData) {
+                            inputElement = questionBlockElement.querySelector(`input[data-test-id="${foundInputData.dataTestId}"]`);
+                         }
+                    }
                     
                     if (inputElement) {
-                        console.log(`Попытка вставить "${valueToInsert}" в input[data-test-id="${dataTestId}"]`);
+                        console.log(`Попытка вставить "${valueToInsert}" в input (ключ: "${key}", data-test-id: ${inputElement.getAttribute('data-test-id')})`);
                         
-                        // ИЗМЕНЕНИЕ ЗДЕСЬ: Используем нативный сеттер и имитируем больше событий
                         const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                         nativeInputValueSetter.call(inputElement, valueToInsert);
 
                         inputElement.dispatchEvent(new Event('focus', { bubbles: true }));
                         inputElement.dispatchEvent(new Event('input', { bubbles: true, inputType: 'insertText' }));
                         inputElement.dispatchEvent(new Event('change', { bubbles: true }));
-                        // inputElement.dispatchEvent(new Event('blur', { bubbles: true })); // Можно раскомментировать для теста
 
                         inputElement.style.backgroundColor = 'lightyellow';
                     } else {
-                        console.warn(`Не найден input для data-test-id="${dataTestId}" для вставки значения.`);
+                        console.warn(`Не найден input для ключа/метки "${key}" для вставки значения "${valueToInsert}".`);
                     }
                 }
             });
@@ -129,7 +147,6 @@
     }
 
     function extractMainQuestionText(block) {
-        // ... (код extractMainQuestionText без изменений)
         const lexicalEditor = block.querySelector(LEXICAL_EDITOR_SELECTOR);
         if (!lexicalEditor) return "";
         let mainQuestionSegments = [];
@@ -148,13 +165,59 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
-    const simplePrompt = "Сколько будет 2 + 2? Дай только числовой ответ.";
-    console.log("Отправка тестового простого промпта:", simplePrompt);
-    return simplePrompt;
-}
+        let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ на поставленные вопросы или для заполнения ячеек.
+Не пиши объяснений, рассуждений или промежуточных шагов.
+Если ответ - число, дай только число. Если дробь - дай дробь (например, 3/40).
+
+Формат ответа для каждого поля ввода:
+"answer-X: значение_ответа" (где X - номер из data-test-id)
+ИЛИ "метка_вопроса: значение_ответа" (если метка более понятна).
+
+Примеры формата:
+answer-1: 28672
+answer-2: 5880
+W для x=5: 1/20 
+n для x=6: 4
+
+---
+ЗАДАНИЕ:
+Основной вопрос:
+${mainQuestionText}
+\n`;
+
+        if (tableData && tableData.rows && tableData.rows.length > 0) {
+            prompt += "\nТаблица для заполнения (предоставь значения для ячеек с [INPUT ...]):\n";
+            if (tableData.headers && tableData.headers.length > 0) {
+                prompt += tableData.headers.join('\t|\t') + '\n';
+                prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
+            }
+            tableData.rows.forEach((row) => {
+                let rowStr = "";
+                (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
+                    const cellContent = row[header]; 
+                    if (cellContent) { 
+                        if (cellContent.type === 'input') {
+                            rowStr += `[INPUT ${cellContent.dataTestId || 'NO_ID'}]` + '\t|\t';
+                        } else {
+                            rowStr += (cellContent.value !== undefined ? cellContent.value : '') + '\t|\t';
+                        }
+                    } else {
+                        rowStr += '' + '\t|\t'; 
+                    }
+                });
+                prompt += rowStr.slice(0, -3) + '\n'; 
+            });
+        } else if (nonTableInputsData.length > 0) {
+            prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого [INPUT ...]):\n";
+            nonTableInputsData.forEach(inputData => {
+                prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
+            });
+        }
+        prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ.\n";
+        return prompt;
+    }
 
     async function processQuestionsOnPage() {
-        // ... (код processQuestionsOnPage без изменений)
         const questionBlocks = document.querySelectorAll(QUESTION_BLOCK_SELECTOR);
         if (questionBlocks.length === 0) {
             console.log('eMaktab Solver: Блоки вопросов не найдены.');
@@ -226,9 +289,8 @@
                     });
                 }
                 let tableHasInputs = tableData.rows.some(r => Object.values(r).some(cell => cell.type === 'input'));
-                if (!tableHasInputs && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) {
-                    tableData = null; 
-                } else if (!tableHasInputs && answerInputs.length === 0) {} 
+                if (!tableHasInputs && answerInputs.length > 0 && !answerInputs.some(inp => tableElement.contains(inp))) { tableData = null; } 
+                else if (!tableHasInputs && answerInputs.length === 0) {} 
                 else if (!tableHasInputs && answerInputs.length > 0 && answerInputs.every(inp => tableElement.contains(inp))) {}
             }
             if (!tableData && answerInputs.length > 0) {
@@ -256,7 +318,7 @@
                         }
                     }
                     nonTableInputsData.push({ dataTestId, context: contextText || "(нет явного контекста)" });
-                    allInputsForDisplay.push({dataTestId, type: 'input'});
+                    allInputsForDisplay.push({dataTestId, context: contextText || "(нет явного контекста)", type: 'input'}); // Добавляем контекст для displayAnswer
                 });
             }
             if (!tableData && nonTableInputsData.length === 0 && answerInputs.length > 0) {
@@ -277,7 +339,6 @@
         solveButton.disabled = false;
     }
 
-    // --- Кнопка запуска ---
     const solveButton = document.createElement('button');
     solveButton.textContent = '🔮 Решить с Gemini';
     solveButton.style.position = 'fixed';

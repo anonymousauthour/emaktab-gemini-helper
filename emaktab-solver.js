@@ -133,19 +133,22 @@
     }
 
     function buildPrompt(mainQuestionText, tableData, nonTableInputsData) {
-    let prompt = `Ты — ИИ-ассистент для решения математических и логических задач.
-Внимательно проанализируй следующий вопрос. 
-Для каждого запрашиваемого ответа (помеченного как [INPUT answer-X] или в таблице) предоставь ТОЛЬКО КОНЕЧНЫЙ РЕЗУЛЬТАТ.
-Избегай промежуточных вычислений или объяснений в ответе, если это явно не указано в вопросе.
-Если ответ — число, дай только число. Если дробь — дай дробь (например, 3/40).
+    let prompt = `ВАЖНО: Предоставляй ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ. Не включай в ответ никаких объяснений, рассуждений или промежуточных шагов.
+Если требуется числовой ответ, дай только число. Если дробь - только дробь (например, 3/40).
 
-Ответы должны быть в формате "answer-X: значение_ответа" или "метка_вопроса: значение_ответа".
-Например:
+Формат ответа:
+Для таблиц: "Имя_колонки для Имя_первого_столбца=значение: твой_ответ" (если есть первый столбец с данными) ИЛИ "answer-X: твой_ответ" (если это единственное поле в строке/вопросе).
+Для нетабличных вопросов: "answer-X: твой_ответ" ИЛИ "метка_пункта: твой_ответ".
+
+Примеры желаемого формата ответа:
 answer-1: 28672
 answer-2: 5880
-Колонка W для x=5: 1/20 
+W для x=5: 1/20
+n для x=6: 4
 Среднее значение: 25
 
+---
+ЗАДАНИЕ:
 Основной вопрос:
 ${mainQuestionText}
 \n`;
@@ -156,18 +159,22 @@ ${mainQuestionText}
             prompt += tableData.headers.join('\t|\t') + '\n';
             prompt += '-'.repeat(tableData.headers.join('\t|\t').length) + '\n';
         }
+        
         tableData.rows.forEach((row, rowIndex) => {
             let rowStr = "";
+            const firstColHeader = tableData.headers.length ? tableData.headers[0] : null;
+            const firstColDataCell = firstColHeader ? row[firstColHeader] : null;
+            const firstColValue = (firstColDataCell && firstColDataCell.type === 'data' && firstColDataCell.value !== '(пусто)') ? firstColDataCell.value : null;
+
             (tableData.headers.length ? tableData.headers : Object.keys(row)).forEach(header => {
                 const cellContent = row[header]; 
                 if (cellContent) { 
                     if (cellContent.type === 'input') {
-                        // Для таблиц просим ответ в формате "Имя_колонки для Имя_первого_столбца=значение: ответ"
-                        // Это поможет Gemini лучше понять, к какой ячейке относится ответ.
-                        // Найдем значение первого столбца для текущей строки
-                        const firstColHeader = tableData.headers.length ? tableData.headers[0] : Object.keys(row)[0];
-                        const firstColValue = row[firstColHeader] && row[firstColHeader].type === 'data' ? row[firstColHeader].value : `строка ${rowIndex +1}`;
-                        rowStr += `[${header} для ${firstColHeader}=${firstColValue} (INPUT ${cellContent.dataTestId || 'NO_ID'})]` + '\t|\t';
+                        let inputLabel = `[INPUT ${cellContent.dataTestId || 'NO_ID'}]`;
+                        if (firstColValue && header !== firstColHeader) { // Добавляем контекст, если это не первая колонка
+                            inputLabel = `[${header} для ${firstColHeader}=${firstColValue} (INPUT ${cellContent.dataTestId || 'NO_ID'})]`;
+                        }
+                        rowStr += inputLabel + '\t|\t';
                     } else {
                         rowStr += (cellContent.value !== undefined ? cellContent.value : '(пусто)') + '\t|\t';
                     }
@@ -177,15 +184,16 @@ ${mainQuestionText}
             });
             prompt += rowStr.slice(0, -3) + '\n'; 
         });
-        prompt += "\nПожалуйста, предоставь значения для всех ячеек, помеченных как [INPUT ...], используя формат 'Имя_колонки для Имя_первого_столбца=значение: твой_ответ' или 'answer-X: твой_ответ'.\n";
+        prompt += "\nПредоставь значения для всех ячеек [INPUT ...].\n";
 
     } else if (nonTableInputsData.length > 0) {
         prompt += "\nОтветь на следующие пункты (дай только конечный ответ для каждого INPUT):\n";
         nonTableInputsData.forEach(inputData => {
             prompt += `${inputData.context.trim()} [INPUT ${inputData.dataTestId}]\n`;
         });
-        prompt += "\nПожалуйста, предоставь значения для всех [INPUT ...], используя формат 'answer-X: твой_ответ' или 'метка_пункта: твой_ответ'.\n";
+        prompt += "\nПредоставь значения для всех [INPUT ...].\n";
     }
+    prompt += "\nПОМНИ: ТОЛЬКО КОНЕЧНЫЕ ОТВЕТЫ, БЕЗ ОБЪЯСНЕНИЙ И ПРОМЕЖУТОЧНЫХ ШАГОВ.\n"; // Еще одно напоминание
     return prompt;
 }
 

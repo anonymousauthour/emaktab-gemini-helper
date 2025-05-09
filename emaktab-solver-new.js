@@ -34,7 +34,7 @@
                 contents: [{ parts: [{ text: fullPrompt }] }],
                 generationConfig: {
                     temperature: 0.3,     // Оставим чуть пониже для точности
-                    maxOutputTokens: 1000, // Увеличим, чтобы точно хватило места для ответа
+                    maxOutputTokens: 10000, // Увеличим, чтобы точно хватило места для ответа
                     // stopSequences: []  // Пока уберем, чтобы не мешали
                 }
             }),

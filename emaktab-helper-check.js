@@ -6,7 +6,7 @@
     console.log('eMaktab Solver Script: Запущен.');
 
     // --- НАСТРОЙКИ ---
-    const GEMINI_API_KEY = 'AIzaSyB9vWInkcJrlGJmhRteOSthybGnSDUwfGw'; // !!! ОБЯЗАТЕЛЬНО ЗАМЕНИ НА СВОЙ КЛЮЧ !!!
+    const GEMINI_API_KEY = 'AIzaSyAOpH6Un9wkni-S1PiY8ZsV6uzsnCz_OVY'; // !!! ОБЯЗАТЕЛЬНО ЗАМЕНИ НА СВОЙ КЛЮЧ !!!
     const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro-exp-03-25:generateContent?key=${GEMINI_API_KEY}`;
 
     // --- Селекторы ---
